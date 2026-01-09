@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Dukem Industry Zone - Staff Performance Follow-ups",
+  "description": "A robust KPI management and performance tracking platform for industrial staff, featuring role-based access, AI-driven performance insights, and administrative authorization workflows.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
