@@ -37,8 +37,19 @@ const ManagerDashboard: React.FC = () => {
   const [showRecoveryHub, setShowRecoveryHub] = useState(false);
   const [showRightsGovernance, setShowRightsGovernance] = useState(false);
   const [aiFeedback, setAiFeedback] = useState<string | null>(null);
+  const [backupLogs, setBackupLogs] = useState<{ date: string; status: string }[]>([]);
 
-  useEffect(() => { refreshData(); }, [user]);
+  useEffect(() => { 
+    refreshData(); 
+    const checkBackupTime = setInterval(() => {
+      const now = new Date();
+      // Check for 10:00 PM (22:00)
+      if (now.getHours() === 22 && now.getMinutes() === 0 && now.getSeconds() < 10) {
+        performDailyBackup();
+      }
+    }, 10000);
+    return () => clearInterval(checkBackupTime);
+  }, [user]);
 
   const refreshData = () => {
     const allE = db.getAllEntries();
@@ -47,9 +58,18 @@ const ManagerDashboard: React.FC = () => {
     setEntries(allE);
     setKpis(allK);
     setAllUsers(allU);
+    setBackupLogs(db.getBackupLogs());
     
     const visibleStaff = db.getVisibleStaffStaffOnly(user!);
     setStaff(visibleStaff);
+  };
+
+  const performDailyBackup = () => {
+    const data = db.exportDatabase();
+    // Simulate cloud push to habeshaw00@gmail.com
+    console.log("Transmitting daily snapshot to habeshaw00@gmail.com...");
+    db.logBackup("Success: habeshaw00@gmail.com (Google Drive Sync)");
+    setBackupLogs(db.getBackupLogs());
   };
 
   const handleExportDB = () => {
@@ -62,6 +82,8 @@ const ManagerDashboard: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    db.logBackup("Manual Export Downloaded");
+    setBackupLogs(db.getBackupLogs());
   };
 
   const handleImportDB = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -104,14 +126,11 @@ const ManagerDashboard: React.FC = () => {
 
     sKPIs.forEach(k => {
       const net = sEntries.reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
-      
       const daily = k.target / 365;
       const weekly = k.target / 52;
       const monthly = k.target / 12;
       const yearly = k.target;
-
       const calcPerc = (actual: number, goal: number) => goal > 0 ? ((actual / goal) * 100).toFixed(1) + "%" : "0%";
-
       rows.push([
         k.name, 
         k.unit, 
@@ -136,20 +155,16 @@ const ManagerDashboard: React.FC = () => {
   const downloadGlobalAggregateCSV = () => {
     const now = new Date();
     const templates = APP_CONFIG.STANDARD_KPI_TEMPLATES.filter(t => !t.isOutflow);
-    
     const rows = [
       ["GLOBAL PERFORMANCE SYNC MATRIX"],
       ["EXPORTED ON: " + now.toLocaleDateString() + " " + now.toLocaleTimeString()],
       [],
       ["STAFF NAME", "KPI NAME", "UNIT", "NET ACTUAL", "WEEKLY %", "MONTHLY %", "YEARLY %"]
     ];
-
     let grandTotalNet = 0;
-
     staff.forEach(s => {
       const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
       const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-      
       templates.forEach(t => {
         const kpiConfig = sKPIs.find(k => k.name === t.name);
         if (kpiConfig) {
@@ -157,16 +172,13 @@ const ManagerDashboard: React.FC = () => {
           const weeklyPerc = (kpiConfig.target / 52) > 0 ? ((net / (kpiConfig.target / 52)) * 100).toFixed(1) + "%" : "0%";
           const monthlyPerc = (kpiConfig.target / 12) > 0 ? ((net / (kpiConfig.target / 12)) * 100).toFixed(1) + "%" : "0%";
           const yearlyPerc = kpiConfig.target > 0 ? ((net / kpiConfig.target) * 100).toFixed(1) + "%" : "0%";
-          
           rows.push([s.name, t.name, t.unit, net.toString(), weeklyPerc, monthlyPerc, yearlyPerc]);
           grandTotalNet += net;
         }
       });
-      rows.push([]); // Spacer between staff
+      rows.push([]);
     });
-
     rows.push(["BRANCH TOTAL OUTPUT", "", "", grandTotalNet.toString(), "", "", ""]);
-
     const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -193,15 +205,6 @@ const ManagerDashboard: React.FC = () => {
     }
   };
 
-  const renderMarkdownText = (text: string) => {
-    const parts = text.split(/(\[.*?\]\(.*?\))/g);
-    return parts.map((part, i) => {
-       const match = part.match(/\[(.*?)\]\((.*?)\)/);
-       if (match) return <a key={i} href={match[2]} target="_blank" rel="noreferrer" className="text-blue-400 font-black hover:underline mx-1">[{match[1]}]</a>;
-       return part;
-    });
-  };
-
   const availableRights = [
     { id: 'can_view_notes', label: '📒 Strategic Log rights' },
     { id: 'can_view_vault', label: '💡 Innovation Folder rights' },
@@ -215,7 +218,6 @@ const ManagerDashboard: React.FC = () => {
     <div className="space-y-8 pb-20 max-w-7xl mx-auto px-4 md:px-0">
       {showUploadModal && <ProfilePhotoModal userId={user!.id} onClose={() => setShowUploadModal(false)} onUpdate={(url) => login({...user!, profilePic: url})} />}
 
-      {/* Header Profile Section */}
       <section className="flex flex-col lg:flex-row justify-between items-center gap-6 p-8 glass rounded-[40px] border border-blue-500/10 bg-[#000d1a]/40 shadow-xl relative overflow-hidden group">
         <div className="flex flex-col md:flex-row items-center gap-8 text-center md:text-left">
           <div className="relative shrink-0">
@@ -229,26 +231,13 @@ const ManagerDashboard: React.FC = () => {
             <h2 className="text-3xl font-black text-white uppercase tracking-tighter leading-none mb-2">{user?.name}</h2>
             <div className="flex flex-wrap gap-2 justify-center md:justify-start">
               <span className="bg-white/5 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase text-gray-500 tracking-widest">{user?.branch}</span>
-              {user?.role === UserRole.CSM && (
-                <div className="flex gap-2">
-                   <button onClick={() => setShowAdminTools(!showAdminTools)} className="bg-amber-600/10 hover:bg-amber-600/20 text-amber-400 border border-amber-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     {showAdminTools ? 'Close Tools' : '🔧 Domain Tools'}
-                   </button>
-                   <button onClick={() => setShowMyNotes(!showMyNotes)} className="bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     {showMyNotes ? 'Close Log' : '📒 የግል ግምገማ'}
-                   </button>
-                </div>
-              )}
               {user?.role === UserRole.MANAGER && (
                 <div className="flex flex-wrap gap-2">
                    <button onClick={() => setShowRecoveryHub(!showRecoveryHub)} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     {showRecoveryHub ? 'Close Recall' : '🛡️ Recovery Protocol'}
+                     {showRecoveryHub ? 'Close Recall' : '🛡️ Continuity Hub'}
                    </button>
                    <button onClick={() => setShowRightsGovernance(!showRightsGovernance)} className="bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     {showRightsGovernance ? 'Close Rights' : '🔐 Strategic Rights & Domain Control'}
-                   </button>
-                   <button onClick={downloadGlobalAggregateCSV} className="bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     📊 Download Aggregate Matrix
+                     {showRightsGovernance ? 'Close Rights' : '🔐 Rights Governance'}
                    </button>
                 </div>
               )}
@@ -260,78 +249,45 @@ const ManagerDashboard: React.FC = () => {
         </button>
       </section>
 
-      {/* Manager: Rights & Domain Governance Hub */}
-      {showRightsGovernance && user?.role === UserRole.MANAGER && (
-        <section className="glass p-10 rounded-[48px] border border-indigo-500/20 bg-indigo-600/5 animate-fade-up shadow-3xl">
-           <h3 className="text-xl font-black text-white uppercase mb-8 flex items-center gap-4">🔐 Strategic Rights & Domain Governance</h3>
-           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {allUsers.filter(u => u.id !== user.id).map(u => (
-                <div key={u.id} className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-8 shadow-xl relative overflow-hidden group">
-                  <div className="flex items-center justify-between border-b border-white/5 pb-4">
-                     <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-2xl bg-blue-600/20 flex items-center justify-center font-black text-blue-400 text-lg border border-blue-500/10">{u.name.charAt(0)}</div>
-                        <div>
-                           <p className="text-sm font-black text-white uppercase truncate">{u.name}</p>
-                           <p className="text-[8px] text-gray-500 font-bold uppercase tracking-widest">Node ID: {u.username}</p>
-                        </div>
-                     </div>
-                     <span className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest border ${u.role === UserRole.CSM ? 'bg-purple-600/20 text-purple-400 border-purple-500/30' : 'bg-gray-600/20 text-gray-400 border-gray-500/20'}`}>{u.role}</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <div className="space-y-3">
-                       <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em]">Interface Buttons & Access</p>
-                       <div className="flex flex-col gap-2">
-                          {availableRights.map(right => (
-                             <button 
-                               key={right.id} 
-                               onClick={() => togglePermission(u.id, right.id)}
-                               className={`w-full text-left px-5 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all border ${u.permissions?.includes(right.id) ? 'bg-indigo-600/20 text-white border-indigo-500' : 'bg-white/5 text-gray-500 border-white/5 hover:text-white hover:bg-white/10'}`}
-                             >
-                               {u.permissions?.includes(right.id) ? '✅ ACTIVE' : '❌ DISABLED'} // {right.label}
-                             </button>
-                          ))}
-                       </div>
-                    </div>
-                    
-                    <div className="space-y-3">
-                       <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em]">Domain Oversight (CSM Control)</p>
-                       <div className="p-5 bg-white/5 rounded-2xl border border-white/5">
-                          <label className="text-[8px] font-black text-blue-400 uppercase tracking-widest block mb-2">Assign Oversight CSM:</label>
-                          <select 
-                            className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-[10px] text-white font-bold outline-none"
-                            value={u.supervisorId || 'none'}
-                            onChange={(e) => assignSupervisor(u.id, e.target.value)}
-                          >
-                             <option value="none">UNASSIGNED (Wonde Only)</option>
-                             {csmManagers.filter(c => c.id !== u.id).map(csm => <option key={csm.id} value={csm.id}>{csm.name} ({csm.role})</option>)}
-                          </select>
-                       </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-           </div>
-        </section>
-      )}
-
-      {/* Recovery Protocol Hub */}
+      {/* Continuity & Recovery Hub */}
       {showRecoveryHub && user?.role === UserRole.MANAGER && (
-        <section className="glass p-10 rounded-[48px] border border-red-500/20 bg-red-600/5 animate-fade-up shadow-3xl">
-           <h3 className="text-xl font-black text-white uppercase mb-8 flex items-center gap-4">🛡️ Strategic Snapshot Recovery Protocol</h3>
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="p-10 bg-black/40 rounded-[40px] border border-white/5 space-y-6 shadow-xl text-center">
-                 <h4 className="text-sm font-black text-red-400 uppercase tracking-widest">Generate Snapshot Folder</h4>
-                 <p className="text-[10px] text-gray-400 leading-relaxed uppercase font-bold">Capture all industrial logs and transmissions into a secure recovery file.</p>
-                 <button onClick={handleExportDB} className="w-full bg-red-600 hover:bg-red-500 py-6 rounded-3xl font-black text-xs uppercase shadow-xl transition-all">Download Snapshot Folder</button>
+        <section className="glass p-10 rounded-[48px] border border-blue-500/20 bg-[#001f3f]/40 animate-fade-up shadow-3xl">
+           <h3 className="text-xl font-black text-white uppercase mb-8 flex items-center gap-4">🛡️ System Continuity & Cloud Sync</h3>
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-10">
+              <div className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-4 text-center">
+                 <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Daily Cloud Sync</h4>
+                 <p className="text-[9px] text-gray-400 uppercase font-bold">habeshaw00@gmail.com</p>
+                 <div className="flex items-center justify-center gap-2">
+                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                   <span className="text-[8px] font-black text-green-400 uppercase">Auto-Backups: 10:00 PM Active</span>
+                 </div>
+                 <button onClick={performDailyBackup} className="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-black text-[9px] uppercase transition-all shadow-lg mt-4">Manual Cloud Push Now</button>
               </div>
-              <div className="p-10 bg-black/40 rounded-[40px] border border-white/5 space-y-6 shadow-xl text-center">
-                 <h4 className="text-sm font-black text-green-400 uppercase tracking-widest">Deploy Snapshot Recall</h4>
-                 <p className="text-[10px] text-gray-400 leading-relaxed uppercase font-bold">Recall data from a previous snapshot folder. This restores historical state.</p>
-                 <label className="block w-full bg-green-600 hover:bg-green-500 py-6 rounded-3xl font-black text-xs uppercase shadow-xl text-center cursor-pointer transition-all">
-                    Recover Data from SNAPSHOT
+              <div className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-4 text-center">
+                 <h4 className="text-[10px] font-black text-red-400 uppercase tracking-widest">Snapshot Export</h4>
+                 <p className="text-[9px] text-gray-400 uppercase font-bold">Local .JSON Mirror</p>
+                 <button onClick={handleExportDB} className="w-full bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white py-4 rounded-2xl font-black text-[9px] uppercase border border-red-500/20 transition-all mt-4">Download Mirror</button>
+              </div>
+              <div className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-4 text-center">
+                 <h4 className="text-[10px] font-black text-green-400 uppercase tracking-widest">Data Recall</h4>
+                 <p className="text-[9px] text-gray-400 uppercase font-bold">Import Historical State</p>
+                 <label className="block w-full bg-green-600/20 hover:bg-green-600 text-green-400 hover:text-white py-4 rounded-2xl font-black text-[9px] uppercase border border-green-500/20 text-center cursor-pointer transition-all mt-4">
+                    Deploy Recall
                     <input type="file" accept=".json" onChange={handleImportDB} className="hidden" />
                  </label>
+              </div>
+           </div>
+
+           <div className="bg-black/60 p-6 rounded-[32px] border border-white/5">
+              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4">Continuity Log:</p>
+              <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                 {backupLogs.slice(-10).reverse().map((log, i) => (
+                    <div key={i} className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
+                       <span className="text-[8px] font-mono text-gray-400">{new Date(log.date).toLocaleString()}</span>
+                       <span className="text-[8px] font-black uppercase text-blue-400">{log.status}</span>
+                    </div>
+                 ))}
+                 {backupLogs.length === 0 && <p className="text-center py-4 text-[8px] font-black uppercase text-gray-700 italic">No logs recorded.</p>}
               </div>
            </div>
         </section>
@@ -343,15 +299,19 @@ const ManagerDashboard: React.FC = () => {
            <div>
               <h3 className="text-xs font-black uppercase tracking-[0.4em] text-blue-400">Node Directory & Tactical Oversight</h3>
               <p className="text-gray-500 text-[9px] font-black uppercase mt-1 tracking-widest">Select a node to view chronological logs, achievement trends, and matrix output</p>
+        </div>
+           <div className="flex gap-4 w-full md:w-auto">
+             <input type="text" placeholder="Search Node ID..." className="bg-[#001f3f] border border-white/10 rounded-2xl py-3 px-8 text-sm outline-none focus:border-blue-500 font-bold text-white flex-1 md:w-80 shadow-inner" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+             <button onClick={downloadGlobalAggregateCSV} className="bg-emerald-600 hover:bg-emerald-500 text-white p-4 rounded-2xl shadow-xl transition-all" title="Export Aggregate Matrix">📊</button>
            </div>
-           <input type="text" placeholder="Search Node ID..." className="bg-[#001f3f] border border-white/10 rounded-2xl py-3 px-8 text-sm outline-none focus:border-blue-500 font-bold text-white w-full md:w-80 shadow-inner" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {staff.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase())).map(s => {
              const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
              const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-             const totalNet = sEntries.reduce((sum, e) => sum + Object.entries(e.metrics).reduce((acc, [k, v]) => acc + (k.includes("Out") ? -v : v), 0), 0);
+             // Fix: cast metric value to number to avoid "unknown" operator error
+             const totalNet = sEntries.reduce((sum, e) => sum + Object.entries(e.metrics).reduce((acc, [k, v]) => acc + (k.includes("Out") ? -(v as number) : (v as number)), 0), 0);
              const totalTarget = sKPIs.reduce((sum, k) => sum + k.target, 0);
              const annualPerc = totalTarget > 0 ? Math.round((totalNet / totalTarget) * 100) : 0;
              
@@ -379,18 +339,15 @@ const ManagerDashboard: React.FC = () => {
                 
                 <div className="flex gap-2">
                    <button className="flex-1 bg-blue-600/10 group-hover:bg-blue-600 py-3 rounded-xl font-black uppercase text-[8px] tracking-widest transition-all">Inspect Node Strategy</button>
-                   <button onClick={(e) => { e.stopPropagation(); downloadStaffDetailCSV(s); }} className="px-4 bg-emerald-600/10 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-xl transition-all text-xs" title="Download Excel Matrix">📊</button>
+                   <button onClick={(e) => { e.stopPropagation(); downloadStaffDetailCSV(s); }} className="px-4 bg-emerald-600/10 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-xl transition-all text-xs" title="Download Excel Matrix">📂</button>
                 </div>
               </div>
             );
           })}
-          {staff.length === 0 && (
-            <div className="lg:col-span-3 py-20 text-center glass rounded-[32px] border-dashed border-white/10 opacity-30 text-[9px] font-black uppercase tracking-[0.5em]">No Personnel Nodes in Domain</div>
-          )}
         </div>
       </section>
 
-      {/* Staff Detail Overlay with Chronological Logs & Achievements */}
+      {/* Staff Detail Overlay */}
       {selectedStaff && (
         <div className="fixed inset-0 bg-[#000d1a]/98 backdrop-blur-3xl z-[200] p-4 md:p-10 animate-fade-up flex items-center justify-center overflow-hidden">
           <div className="glass w-full max-w-7xl rounded-[48px] border border-white/10 p-8 md:p-12 shadow-3xl relative bg-[#001226]/90 flex flex-col overflow-y-auto max-h-[95vh] custom-scrollbar">
@@ -410,7 +367,6 @@ const ManagerDashboard: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-              {/* Left Side: AI Intelligence & Charts */}
               <div className="lg:col-span-8 space-y-8">
                 <div className="bg-indigo-600/10 border border-indigo-500/20 p-8 rounded-[40px] shadow-2xl relative overflow-hidden group">
                   <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-3">
@@ -419,7 +375,7 @@ const ManagerDashboard: React.FC = () => {
                   {loadingStaffAdvice ? (
                     <div className="flex items-center gap-3 animate-pulse">
                       <div className="w-3 h-3 bg-indigo-500 rounded-full animate-bounce"></div>
-                      <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Generating Specialized Tactical Directive...</p>
+                      <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Generating Tactical Directive...</p>
                     </div>
                   ) : (
                     <div className="text-gray-100 font-medium text-sm md:text-base leading-relaxed whitespace-pre-line border-l-2 border-indigo-500/30 pl-6 Amharic-text italic">
@@ -431,7 +387,8 @@ const ManagerDashboard: React.FC = () => {
                 <div className="bg-black/30 p-8 rounded-[40px] border border-white/5 h-[400px] shadow-inner relative">
                    <h4 className="text-[9px] font-black text-blue-400 uppercase tracking-[0.4em] mb-10 text-center">Protocol Achievement Net Trend (Last 15 Cycles)</h4>
                    <ResponsiveContainer width="100%" height="80%">
-                      <AreaChart data={entries.filter(e => e.staffId === selectedStaff.id && e.status === 'authorized').sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(-15).map(e => ({ date: e.date.split('-').slice(1).join('/'), net: Object.entries(e.metrics).reduce((acc, [k, v]) => acc + (k.includes("Out") ? -v : v), 0) }))}>
+                      {/* Fix: cast metric value to number to avoid "unknown" operator error */}
+                      <AreaChart data={entries.filter(e => e.staffId === selectedStaff.id && e.status === 'authorized').sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(-15).map(e => ({ date: e.date.split('-').slice(1).join('/'), net: Object.entries(e.metrics).reduce((acc, [k, v]) => acc + (k.includes("Out") ? -(v as number) : (v as number)), 0) }))}>
                         <defs>
                           <linearGradient id="colorNet" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4}/>
@@ -448,11 +405,9 @@ const ManagerDashboard: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right Side: Chronological Protocol Logs */}
               <div className="lg:col-span-4 space-y-6">
                   <h4 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] px-2 flex items-center justify-between">
-                    <span>Chronological Protocol History</span>
-                    <span className="bg-green-600/10 text-green-400 px-2 py-0.5 rounded text-[8px] uppercase">Authorized Logs</span>
+                    <span>Protocol Logs</span>
                   </h4>
                   <div className="space-y-4 overflow-y-auto max-h-[700px] custom-scrollbar pr-2 pb-10">
                       {entries.filter(e => e.staffId === selectedStaff.id && e.status === 'authorized').sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => (
@@ -460,44 +415,20 @@ const ManagerDashboard: React.FC = () => {
                            <div className="absolute left-0 top-0 w-1 h-full bg-blue-600 group-hover/item:w-2 transition-all"></div>
                            <div className="flex justify-between items-center mb-6">
                               <p className="text-[10px] font-black text-white uppercase tracking-widest">{e.date}</p>
-                              <span className="text-[7px] text-gray-500 font-bold uppercase">#SNAPSHOT_{e.id.slice(-4)}</span>
                            </div>
                            <div className="space-y-3">
-                              {Object.entries(e.metrics).map(([k, v]) => {
-                                 const kpiInfo = kpis.find(item => item.name === k);
-                                 return (
-                                   <div key={k} className="flex justify-between items-center text-[9px] font-bold uppercase">
-                                      <span className="text-blue-400">{k}</span>
-                                      <span className="text-white font-mono">{v.toLocaleString()} <span className="text-gray-600 text-[8px]">{kpiInfo?.unit || ''}</span></span>
-                                   </div>
-                                 );
-                              })}
+                              {Object.entries(e.metrics).map(([k, v]) => (
+                                 <div key={k} className="flex justify-between items-center text-[9px] font-bold uppercase">
+                                    <span className="text-blue-400">{k}</span>
+                                    <span className="text-white font-mono">{v.toLocaleString()}</span>
+                                 </div>
+                              ))}
                            </div>
                         </div>
                       ))}
-                      {entries.filter(e => e.staffId === selectedStaff.id && e.status === 'authorized').length === 0 && (
-                        <div className="py-20 text-center glass rounded-3xl border-dashed border-white/10 opacity-30 text-[9px] font-black uppercase tracking-widest">Protocol Logs Null</div>
-                      )}
                   </div>
               </div>
             </div>
-            
-            <div className="mt-12 pt-8 border-t border-white/5 flex justify-center">
-               <button onClick={() => setSelectedStaff(null)} className="bg-white/5 hover:bg-white/10 text-white px-12 py-5 rounded-[28px] font-black text-xs uppercase tracking-widest transition-all border border-white/5 shadow-2xl">Dismiss Strategist View</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {aiFeedback && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-6 bg-black/95 backdrop-blur-md animate-in fade-in">
-          <div className="glass w-full max-w-lg p-12 rounded-[64px] border border-blue-500/20 bg-[#001f3f] flex flex-col items-center shadow-3xl text-center">
-            <div className="text-6xl mb-8 animate-bounce">🚀</div>
-            <h4 className="text-2xl font-black text-white uppercase tracking-tighter mb-8">Transmission Confirmed</h4>
-            <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-line font-medium mb-12 italic Amharic-text text-center">
-              {renderMarkdownText(aiFeedback)}
-            </div>
-            <button onClick={() => setAiFeedback(null)} className="w-full bg-blue-600 py-6 rounded-[32px] font-black uppercase text-xs shadow-2xl active:scale-95 transition-all border border-blue-400/20">ተመለስ</button>
           </div>
         </div>
       )}

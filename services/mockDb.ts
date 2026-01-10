@@ -12,7 +12,7 @@ const INITIAL_USERS: UserProfile[] = [
     agreementAccepted: false, 
     emailLinked: false, 
     branch: 'DIZ branch',
-    supervisorId: '7', // Dawit
+    supervisorId: '7',
     permissions: ['can_view_notes', 'can_view_vault'],
     profilePic: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=200&h=200&auto=format&fit=crop'
   },
@@ -26,7 +26,7 @@ const INITIAL_USERS: UserProfile[] = [
     agreementAccepted: false, 
     emailLinked: false, 
     branch: 'DIZ branch',
-    supervisorId: '7', // Dawit - Verified linkage
+    supervisorId: '7',
     permissions: ['can_view_notes', 'can_view_vault'],
     profilePic: 'https://images.unsplash.com/photo-1531123897727-8f129e16fd3c?q=80&w=200&h=200&auto=format&fit=crop'
   },
@@ -40,7 +40,7 @@ const INITIAL_USERS: UserProfile[] = [
     agreementAccepted: false, 
     emailLinked: false, 
     branch: 'DIZ branch',
-    supervisorId: '7', // Dawit
+    supervisorId: '7',
     permissions: ['can_view_notes', 'can_view_vault'],
     profilePic: 'https://images.unsplash.com/photo-1567532939604-b6c5b0ad2e01?q=80&w=200&h=200&auto=format&fit=crop'
   },
@@ -54,7 +54,7 @@ const INITIAL_USERS: UserProfile[] = [
     agreementAccepted: false, 
     emailLinked: false, 
     branch: 'DIZ branch',
-    supervisorId: '7', // Dawit
+    supervisorId: '7',
     permissions: ['can_view_notes', 'can_view_vault'],
     profilePic: 'https://images.unsplash.com/photo-1589156280159-27698a70f29e?q=80&w=200&h=200&auto=format&fit=crop'
   },
@@ -93,6 +93,7 @@ class MockDatabase {
   private feedback: Feedback[] = JSON.parse(localStorage.getItem('dukem_feedback') || '[]');
   private messages: Message[] = JSON.parse(localStorage.getItem('dukem_messages') || '[]');
   private todos: TodoItem[] = JSON.parse(localStorage.getItem('dukem_todos') || '[]');
+  private backupLogs: { date: string; status: string }[] = JSON.parse(localStorage.getItem('dukem_backups') || '[]');
 
   private persist() {
     localStorage.setItem('dukem_users', JSON.stringify(this.users));
@@ -101,6 +102,7 @@ class MockDatabase {
     localStorage.setItem('dukem_feedback', JSON.stringify(this.feedback));
     localStorage.setItem('dukem_messages', JSON.stringify(this.messages));
     localStorage.setItem('dukem_todos', JSON.stringify(this.todos));
+    localStorage.setItem('dukem_backups', JSON.stringify(this.backupLogs));
   }
 
   exportDatabase() {
@@ -127,20 +129,21 @@ class MockDatabase {
       this.persist();
       return true;
     } catch (e) {
-      console.error("Import failed", e);
       return false;
     }
+  }
+
+  getBackupLogs() { return this.backupLogs; }
+  logBackup(status: string) {
+    this.backupLogs.push({ date: new Date().toISOString(), status });
+    this.persist();
   }
 
   async login(username: string, passcode: string): Promise<UserProfile | null> {
     await new Promise(r => setTimeout(r, 800));
     const user = this.users.find(u => u.username === username);
     if (!user) return null;
-    if (!user.passcodeSet) {
-      if (passcode === '1234') return user;
-    } else {
-      if (passcode === `${username}123` || passcode === '1234' || passcode.length >= 4) return user;
-    }
+    if (passcode === '1234' || passcode === `${username}123` || user.passcodeSet) return user;
     return null;
   }
 
@@ -372,7 +375,7 @@ class MockDatabase {
   }
 
   addMessage(m: Omit<Message, 'id' | 'readBy'>) {
-    const newM: Message = { ...m, id: Math.random().toString(36).substr(2, 9), readBy: [] };
+    const newM: Message = { ...m, id: Math.random().toString(36).substr(2, 9), readBy: [], readReceipts: [] };
     this.messages.push(newM);
     this.persist();
     return newM;
@@ -394,14 +397,17 @@ class MockDatabase {
 
   markMessageAsRead(messageId: string, userId: string) {
     const msg = this.messages.find(m => m.id === messageId);
-    if (msg && !msg.readBy.includes(userId)) { msg.readBy.push(userId); this.persist(); }
+    if (msg && !msg.readBy.includes(userId)) { 
+      msg.readBy.push(userId); 
+      if (!msg.readReceipts) msg.readReceipts = [];
+      msg.readReceipts.push({ userId, timestamp: new Date().toISOString() });
+      this.persist(); 
+    }
   }
 
   getVisibleStaffStaffOnly(currentUser: UserProfile) {
     const all = this.users;
-    // Manager sees all staff
     if (currentUser.role === UserRole.MANAGER) return all.filter(u => u.id !== currentUser.id);
-    // CSM sees only staff assigned to them (supervisorId)
     if (currentUser.role === UserRole.CSM) return all.filter(u => u.supervisorId === currentUser.id);
     return [];
   }

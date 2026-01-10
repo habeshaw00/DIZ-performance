@@ -18,20 +18,19 @@ export interface UserProfile {
   profilePic?: string;
   branch?: string;
   permissions?: string[]; 
-  supervisorId?: string; // New: Links a staff member to a CSM or Manager for domain oversight
+  supervisorId?: string;
 }
 
 export interface KPIConfig {
   id: string;
   name: string;
-  target: number; // This is the Yearly Target base
+  target: number;
   assignedToEmail: string;
   unit: string;
   measure: string;
   timeFrame: 'Daily' | 'Weekly' | 'Monthly' | 'Quarterly' | 'Yearly';
   status: 'pending' | 'approved';
   createdBy: string;
-  // Metadata for performance tracking logic
   isDeposit?: boolean;
   isOutflow?: boolean;
 }
@@ -83,4 +82,5 @@ export interface Message {
   };
   timestamp: string;
   readBy: string[]; 
+  readReceipts?: { userId: string; timestamp: string }[];
 }

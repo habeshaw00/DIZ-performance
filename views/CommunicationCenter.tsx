@@ -17,15 +17,25 @@ const CommunicationCenter: React.FC = () => {
   const [sentMessages, setSentMessages] = useState<Message[]>([]);
   const [editingMsg, setEditingMsg] = useState<Message | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [receiptViewerMsg, setReceiptViewerMsg] = useState<Message | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setStaff(db.getStaffUsers());
     refreshSent();
+    const interval = setInterval(refreshSent, 3000);
+    return () => clearInterval(interval);
   }, [user]);
 
   const refreshSent = () => {
-    if (user) setSentMessages(db.getMessagesSentBy(user.id).sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+    if (user) {
+      const msgs = db.getMessagesSentBy(user.id).sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      setSentMessages(msgs);
+      if (receiptViewerMsg) {
+        const updated = msgs.find(m => m.id === receiptViewerMsg.id);
+        if (updated) setReceiptViewerMsg(updated);
+      }
+    }
   };
 
   const handleSend = async (e: React.FormEvent) => {
@@ -46,7 +56,6 @@ const CommunicationCenter: React.FC = () => {
           url: attachmentUrl || '#'
         } : undefined,
       });
-      alert('Directive Transmitted (Update).');
       setEditingMsg(null);
     } else {
       db.addMessage({
@@ -62,7 +71,6 @@ const CommunicationCenter: React.FC = () => {
         } : undefined,
         timestamp: new Date().toISOString()
       });
-      alert('Protocol Broadcast Transmitted!');
     }
 
     setIsSending(false);
@@ -81,7 +89,7 @@ const CommunicationCenter: React.FC = () => {
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Erase this directive from strategic records?')) {
+    if (window.confirm('Erase this directive?')) {
       db.deleteMessage(id);
       refreshSent();
     }
@@ -159,80 +167,89 @@ const CommunicationCenter: React.FC = () => {
                       {type === 'document' ? '📄 DOC' : type === 'video' ? '🎬 VIDEO' : type === 'link' ? '🔗 URL' : '🎇 GIF'}
                     </button>
                   ))}
-                  <button type="button" onClick={() => { setAttachmentType('none'); setAttachmentUrl(''); setAttachmentName(''); }} className="px-5 py-2.5 bg-red-600/10 text-red-400 rounded-xl text-[9px] font-black uppercase">Clear</button>
                 </div>
                 <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
-                
-                {attachmentType === 'link' && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 animate-in slide-in-from-top-2">
-                    <input type="text" placeholder="Protocol Label" className="bg-black/40 border border-white/10 rounded-2xl p-4 text-xs text-white" value={attachmentName} onChange={e => setAttachmentName(e.target.value)} />
-                    <input type="text" placeholder="Target URL" className="bg-black/40 border border-white/10 rounded-2xl p-4 text-xs text-white" value={attachmentUrl} onChange={e => setAttachmentUrl(e.target.value)} />
-                  </div>
-                )}
-                {attachmentUrl && attachmentType !== 'link' && (
-                  <div className="p-4 bg-white/5 rounded-2xl border border-white/5 flex items-center justify-between mt-4">
-                    <p className="text-[10px] font-black text-purple-200 truncate max-w-[200px]">{attachmentName}</p>
-                    <span className="text-[8px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded-lg">READY</span>
-                  </div>
-                )}
               </div>
 
               <div className="flex gap-4">
-                <button type="button" onClick={() => setShowPreview(true)} className="flex-1 bg-white/5 hover:bg-white/10 py-5 rounded-[28px] font-black uppercase text-[10px] border border-white/5 transition-all">👀 Live Preview</button>
-                <button type="submit" disabled={isSending} className="flex-2 bg-gradient-to-r from-purple-700 to-indigo-700 py-6 rounded-[28px] font-black uppercase tracking-[0.2em] text-white shadow-2xl transition-all disabled:opacity-50">{isSending ? 'Syncing...' : editingMsg ? 'Execute Update' : 'Broadcast Protocol'}</button>
+                <button type="button" onClick={() => setShowPreview(true)} className="flex-1 bg-white/5 hover:bg-white/10 py-5 rounded-[28px] font-black uppercase text-[10px] border border-white/5 transition-all">👀 Preview</button>
+                <button type="submit" disabled={isSending} className="flex-2 bg-gradient-to-r from-purple-700 to-indigo-700 py-6 rounded-[28px] font-black uppercase tracking-[0.2em] text-white shadow-2xl transition-all disabled:opacity-50">{isSending ? 'Syncing...' : editingMsg ? 'Update' : 'Broadcast'}</button>
               </div>
             </form>
           </div>
         </div>
 
         <div className="lg:col-span-1 space-y-6">
-          <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] px-2">Sent History History</h3>
+          <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] px-2">Transmission Log History</h3>
           <div className="space-y-4 max-h-[800px] overflow-y-auto custom-scrollbar pr-2">
-            {sentMessages.map(m => (
-              <div key={m.id} className="p-6 bg-[#001226]/80 rounded-[32px] border border-white/5 shadow-xl group transition-all hover:border-purple-500/30">
-                <div className="flex justify-between items-start mb-4">
-                  <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${m.type === 'priority' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>{m.type}</span>
-                  <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => handleEdit(m)} className="p-2 hover:bg-blue-600 rounded-lg text-[10px]">✏️</button>
-                    <button onClick={() => handleDelete(m.id)} className="p-2 hover:bg-red-600 rounded-lg text-[10px]">🗑️</button>
+            {sentMessages.map(m => {
+              const readCount = m.readBy.length;
+              const totalTarget = m.toId === 'ALL' ? staff.length : 1;
+              const perc = Math.round((readCount / totalTarget) * 100);
+              return (
+                <div key={m.id} className="p-6 bg-[#001226]/80 rounded-[32px] border border-white/5 shadow-xl group transition-all hover:border-purple-500/30">
+                  <div className="flex justify-between items-start mb-4">
+                    <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${m.type === 'priority' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>{m.type}</span>
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => setReceiptViewerMsg(m)} className="p-2 hover:bg-blue-600 rounded-lg text-[10px]">👁️</button>
+                      <button onClick={() => handleEdit(m)} className="p-2 hover:bg-blue-600 rounded-lg text-[10px]">✏️</button>
+                      <button onClick={() => handleDelete(m.id)} className="p-2 hover:bg-red-600 rounded-lg text-[10px]">🗑️</button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-gray-300 font-medium line-clamp-3 mb-4 italic leading-relaxed">"{m.content}"</p>
+                  
+                  <div className="space-y-3 border-t border-white/5 pt-4">
+                    <div className="flex justify-between items-center text-[7px] font-black uppercase text-gray-500">
+                      <span>Sync Oversight: {readCount} / {totalTarget} Nodes Read</span>
+                      <span className={perc === 100 ? 'text-green-400' : 'text-purple-400'}>{perc}%</span>
+                    </div>
+                    <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                      <div className={`h-full transition-all duration-1000 ${perc === 100 ? 'bg-green-500' : 'bg-purple-600'}`} style={{ width: `${perc}%` }}></div>
+                    </div>
                   </div>
                 </div>
-                <p className="text-[11px] text-gray-300 font-medium line-clamp-3 mb-4 italic leading-relaxed">"{m.content}"</p>
-                <div className="flex items-center justify-between text-[8px] text-gray-600 font-black uppercase">
-                  <span>{new Date(m.timestamp).toLocaleDateString()}</span>
-                  {m.attachment && <span className="bg-purple-600/10 text-purple-400 px-2 py-0.5 rounded">Asset attached</span>}
-                </div>
-              </div>
-            ))}
-            {sentMessages.length === 0 && <div className="py-20 text-center glass rounded-[32px] border-dashed border-white/5 text-[9px] font-black uppercase text-gray-600 opacity-40 italic">Log History Null</div>}
+              );
+            })}
           </div>
         </div>
       </div>
+
+      {receiptViewerMsg && (
+        <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in">
+           <div className="glass w-full max-w-md rounded-[48px] border border-white/10 p-10 bg-[#001226] shadow-3xl flex flex-col max-h-[80vh]">
+              <h4 className="text-xl font-black text-white uppercase text-center mb-8">Oversight Receipts</h4>
+              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
+                 {(receiptViewerMsg.toId === 'ALL' ? staff : staff.filter(s => s.id === receiptViewerMsg.toId)).map(s => {
+                    const receipt = receiptViewerMsg.readReceipts?.find(r => r.userId === s.id);
+                    return (
+                      <div key={s.id} className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${receipt ? 'bg-green-600/10 border-green-500/20' : 'bg-white/5 border-white/5 grayscale opacity-50'}`}>
+                         <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-[10px] font-black overflow-hidden">
+                               {s.profilePic ? <img src={s.profilePic} className="w-full h-full object-cover" /> : s.name.charAt(0)}
+                            </div>
+                            <div>
+                               <p className="text-[10px] font-black text-white uppercase">{s.name}</p>
+                               <p className="text-[8px] text-gray-500 uppercase font-black">{receipt ? '👁️ Viewed' : '📫 Delivered'}</p>
+                            </div>
+                         </div>
+                         {receipt && <span className="text-[7px] font-mono text-green-500">{new Date(receipt.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>}
+                      </div>
+                    );
+                 })}
+              </div>
+              <button onClick={() => setReceiptViewerMsg(null)} className="w-full bg-blue-600 mt-8 py-5 rounded-3xl font-black uppercase text-[10px] shadow-xl">Close Oversight</button>
+           </div>
+        </div>
+      )}
 
       {showPreview && (
         <div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur-lg flex items-center justify-center p-8 animate-in zoom-in-95 duration-300">
            <div className="glass w-full max-w-2xl rounded-[64px] border border-purple-500/30 p-12 bg-[#000d1a] shadow-2xl relative">
               <h4 className="text-[9px] font-black text-purple-400 uppercase tracking-[0.5em] text-center mb-12">Protocol Transmission Preview</h4>
-              <div className="flex items-center gap-6 mb-10">
-                <div className="w-20 h-20 rounded-[32px] bg-gradient-to-br from-purple-600 to-indigo-700 flex items-center justify-center text-4xl shadow-2xl">📡</div>
-                <div>
-                  <p className="text-2xl font-black text-white uppercase tracking-tighter">Command Entity</p>
-                  <p className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Protocol Class: {msgType}</p>
-                </div>
-              </div>
               <div className="p-10 bg-white/5 rounded-[48px] border border-white/5 italic text-gray-200 text-lg leading-relaxed shadow-inner">
-                "{message || 'Awaiting transmission data...'}"
+                "{message || '...waiting...'}"
               </div>
-              {attachmentUrl && (
-                <div className="mt-8 p-6 bg-purple-900/20 rounded-[32px] border border-purple-500/20 flex items-center justify-between">
-                   <div className="flex items-center gap-4">
-                     <span className="text-2xl">📁</span>
-                     <p className="text-[10px] font-black text-white uppercase">{attachmentName}</p>
-                   </div>
-                   <span className="text-[8px] font-black uppercase text-purple-400">Attached Asset Class: {attachmentType}</span>
-                </div>
-              )}
-              <button onClick={() => setShowPreview(false)} className="w-full bg-purple-600 mt-12 py-6 rounded-[32px] font-black uppercase tracking-widest text-xs shadow-xl transition-all">Confirm & Close Preview</button>
+              <button onClick={() => setShowPreview(false)} className="w-full bg-purple-600 mt-12 py-6 rounded-[32px] font-black uppercase tracking-widest text-xs shadow-xl">Dismiss Preview</button>
            </div>
         </div>
       )}
