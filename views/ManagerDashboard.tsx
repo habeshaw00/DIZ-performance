@@ -39,6 +39,10 @@ const ManagerDashboard: React.FC = () => {
   const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [backupLogs, setBackupLogs] = useState<{ date: string; status: string }[]>([]);
 
+  const [playingAIReportAudio, setPlayingAIReportAudio] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
   useEffect(() => { 
     refreshData(); 
     const checkBackupTime = setInterval(() => {
@@ -48,7 +52,10 @@ const ManagerDashboard: React.FC = () => {
         performDailyBackup();
       }
     }, 10000);
-    return () => clearInterval(checkBackupTime);
+    return () => {
+        clearInterval(checkBackupTime);
+        stopAudio();
+    }
   }, [user]);
 
   const refreshData = () => {
@@ -62,6 +69,37 @@ const ManagerDashboard: React.FC = () => {
     
     const visibleStaff = db.getVisibleStaffStaffOnly(user!);
     setStaff(visibleStaff);
+  };
+
+  const stopAudio = () => {
+      if (audioSourceRef.current) {
+          try { audioSourceRef.current.stop(); } catch(e) {}
+          audioSourceRef.current = null;
+      }
+      setPlayingAIReportAudio(false);
+  };
+
+  const playAIReport = async () => {
+      if (playingAIReportAudio) { stopAudio(); return; }
+      if (!aiReport) return;
+      stopAudio();
+      setPlayingAIReportAudio(true);
+      try {
+          const base64Audio = await generateAdviceAudio(aiReport);
+          if (!base64Audio) throw new Error();
+          
+          if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+          const ctx = audioContextRef.current;
+          const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+          source.onended = () => setPlayingAIReportAudio(false);
+          audioSourceRef.current = source;
+          source.start();
+      } catch (err) {
+          setPlayingAIReportAudio(false);
+      }
   };
 
   const performDailyBackup = () => {
@@ -249,6 +287,24 @@ const ManagerDashboard: React.FC = () => {
         </button>
       </section>
 
+      {/* AI Intelligence Relay */}
+      {aiReport && (
+        <section className="glass p-10 rounded-[56px] border border-indigo-500/30 bg-indigo-600/5 animate-fade-up shadow-3xl relative">
+          <div className="flex justify-between items-start mb-8">
+            <h3 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-4">
+              🤖 Strategic Intelligence Relay
+            </h3>
+            <div className="flex gap-3">
+              <button onClick={playAIReport} className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${playingAIReportAudio ? 'bg-red-600 animate-pulse text-white' : 'bg-indigo-600/10 text-indigo-400 hover:bg-indigo-600/20'}`} title="Listen to Report">
+                {playingAIReportAudio ? '🔇' : '🔊'}
+              </button>
+              <button onClick={() => setAiReport(null)} className="text-[10px] font-black uppercase text-gray-500 hover:text-white transition-colors">መዝጊያ ✕</button>
+            </div>
+          </div>
+          <p className="text-gray-200 text-xs md:text-sm italic leading-relaxed whitespace-pre-line border-l border-indigo-500/50 pl-6 Amharic-text">{aiReport}</p>
+        </section>
+      )}
+
       {/* Continuity & Recovery Hub */}
       {showRecoveryHub && user?.role === UserRole.MANAGER && (
         <section className="glass p-10 rounded-[48px] border border-blue-500/20 bg-[#001f3f]/40 animate-fade-up shadow-3xl">
@@ -292,6 +348,61 @@ const ManagerDashboard: React.FC = () => {
            </div>
         </section>
       )}
+      
+      {/* Manager: Rights & Domain Governance Hub */}
+      {showRightsGovernance && user?.role === UserRole.MANAGER && (
+        <section className="glass p-10 rounded-[48px] border border-indigo-500/20 bg-indigo-600/5 animate-fade-up shadow-3xl">
+           <h3 className="text-xl font-black text-white uppercase mb-8 flex items-center gap-4">🔐 Strategic Rights & Domain Governance</h3>
+           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {allUsers.filter(u => u.id !== user.id).map(u => (
+                <div key={u.id} className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-8 shadow-xl relative overflow-hidden group">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                     <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-2xl bg-blue-600/20 flex items-center justify-center font-black text-blue-400 text-lg border border-blue-500/10">{u.name.charAt(0)}</div>
+                        <div>
+                           <p className="text-sm font-black text-white uppercase truncate">{u.name}</p>
+                           <p className="text-[8px] text-gray-500 font-bold uppercase tracking-widest">Node ID: {u.username}</p>
+                        </div>
+                     </div>
+                     <span className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest border ${u.role === UserRole.CSM ? 'bg-purple-600/20 text-purple-400 border-purple-500/30' : 'bg-gray-600/20 text-gray-400 border-gray-500/20'}`}>{u.role}</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <div className="space-y-3">
+                       <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em]">Interface Buttons & Access</p>
+                       <div className="flex flex-col gap-2">
+                          {availableRights.map(right => (
+                             <button 
+                               key={right.id} 
+                               onClick={() => togglePermission(u.id, right.id)}
+                               className={`w-full text-left px-5 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all border ${u.permissions?.includes(right.id) ? 'bg-indigo-600/20 text-white border-indigo-500' : 'bg-white/5 text-gray-500 border-white/5 hover:text-white hover:bg-white/10'}`}
+                             >
+                               {u.permissions?.includes(right.id) ? '✅ ACTIVE' : '❌ DISABLED'} // {right.label}
+                             </button>
+                          ))}
+                       </div>
+                    </div>
+                    
+                    <div className="space-y-3">
+                       <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em]">Domain Oversight (CSM Control)</p>
+                       <div className="p-5 bg-white/5 rounded-2xl border border-white/5">
+                          <label className="text-[8px] font-black text-blue-400 uppercase tracking-widest block mb-2">Assign Oversight CSM:</label>
+                          <select 
+                            className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-[10px] text-white font-bold outline-none"
+                            value={u.supervisorId || 'none'}
+                            onChange={(e) => assignSupervisor(u.id, e.target.value)}
+                          >
+                             <option value="none">UNASSIGNED (Wonde Only)</option>
+                             {csmManagers.filter(c => c.id !== u.id).map(csm => <option key={csm.id} value={csm.id}>{csm.name} ({csm.role})</option>)}
+                          </select>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+           </div>
+        </section>
+      )}
 
       {/* Node Directory Section */}
       <section className="glass p-10 rounded-[48px] border border-white/5 bg-[#000d1a]/40 shadow-2xl">
@@ -302,7 +413,9 @@ const ManagerDashboard: React.FC = () => {
         </div>
            <div className="flex gap-4 w-full md:w-auto">
              <input type="text" placeholder="Search Node ID..." className="bg-[#001f3f] border border-white/10 rounded-2xl py-3 px-8 text-sm outline-none focus:border-blue-500 font-bold text-white flex-1 md:w-80 shadow-inner" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-             <button onClick={downloadGlobalAggregateCSV} className="bg-emerald-600 hover:bg-emerald-500 text-white p-4 rounded-2xl shadow-xl transition-all" title="Export Aggregate Matrix">📊</button>
+             <button onClick={downloadGlobalAggregateCSV} className="bg-emerald-600 hover:bg-emerald-500 text-white p-4 rounded-2xl shadow-xl transition-all flex items-center gap-2" title="Export Aggregate Matrix">
+               📊 <span className="text-[10px] font-black uppercase">Excel Aggregate</span>
+             </button>
            </div>
         </div>
 

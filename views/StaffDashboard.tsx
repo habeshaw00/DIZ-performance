@@ -29,6 +29,7 @@ const StaffDashboard: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
+  const [playingGeneralAudio, setPlayingGeneralAudio] = useState(false);
 
   useEffect(() => {
     const data = db.getKPIsForUser(user!.email);
@@ -36,10 +37,21 @@ const StaffDashboard: React.FC = () => {
     const staffEntries = db.getEntriesForStaff(user!.id);
     setEntries(staffEntries);
     setTodos(db.getTodosForStaff(user!.id));
-    setPerfNote(MOTIVATIONAL_QUOTES_AMHARIC[Math.floor(Math.random() * MOTIVATIONAL_QUOTES_AMHARIC.length)]);
+    
+    // Set random quote on mount/login to ensure freshness
+    const randomQuote = MOTIVATIONAL_QUOTES_AMHARIC[Math.floor(Math.random() * MOTIVATIONAL_QUOTES_AMHARIC.length)];
+    setPerfNote(randomQuote);
+    
     if (data.length > 0) fetchGeneralAnalysis(data, staffEntries);
     return () => stopAudio();
   }, [user]);
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) return "እንደምን አደሩ";
+    if (hour >= 12 && hour < 18) return "እንደምን ዋሉ";
+    return "እንደምን አመሹ";
+  };
 
   const fetchGeneralAnalysis = async (staffKPIs: KPIConfig[], staffEntries: DailyEntry[]) => {
     setLoadingGeneral(true);
@@ -63,6 +75,7 @@ const StaffDashboard: React.FC = () => {
       audioSourceRef.current = null;
     }
     setReadingId(null);
+    setPlayingGeneralAudio(false);
   };
 
   const playAdvice = async (id: string, text: string) => {
@@ -72,16 +85,32 @@ const StaffDashboard: React.FC = () => {
     try {
       const base64Audio = await generateAdviceAudio(text);
       if (!base64Audio) throw new Error();
-      if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      const ctx = audioContextRef.current;
-      const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      source.onended = () => setReadingId(null);
-      audioSourceRef.current = source;
-      source.start();
+      playAudioData(base64Audio, () => setReadingId(null));
     } catch (err) { setReadingId(null); }
+  };
+
+  const playGeneralAdviceAudio = async () => {
+    if (playingGeneralAudio) { stopAudio(); return; }
+    if (!generalAdvice) return;
+    stopAudio();
+    setPlayingGeneralAudio(true);
+    try {
+      const base64Audio = await generateAdviceAudio(generalAdvice);
+      if (!base64Audio) throw new Error();
+      playAudioData(base64Audio, () => setPlayingGeneralAudio(false));
+    } catch (err) { setPlayingGeneralAudio(false); }
+  };
+
+  const playAudioData = async (base64Audio: string, onEnded: () => void) => {
+    if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    const ctx = audioContextRef.current;
+    const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+    source.onended = onEnded;
+    audioSourceRef.current = source;
+    source.start();
   };
 
   const fetchTips = async (kpi: KPIConfig, actual: number) => {
@@ -131,6 +160,47 @@ const StaffDashboard: React.FC = () => {
     } catch (err) { alert("Relay error."); } finally { setIsSubmitting(false); }
   };
 
+  const handleExportCSV = () => {
+    const now = new Date();
+    const rows = [
+      ["STAFF PERFORMANCE MATRIX - NODE: " + user!.name.toUpperCase()],
+      ["ID: " + user!.username.toUpperCase(), "BRANCH: " + (user!.branch || 'DIZ branch')],
+      ["EXPORTED ON: " + now.toLocaleDateString() + " " + now.toLocaleTimeString()],
+      [],
+      ["KPI NAME", "UNIT", "NET ACTUAL", "DAILY GOAL", "DAILY %", "WEEKLY GOAL", "WEEKLY %", "MONTHLY GOAL", "MONTHLY %", "YEARLY GOAL", "YEARLY %"]
+    ];
+
+    kpis.forEach(k => {
+      const net = entries.filter(e => e.status === 'authorized').reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
+      
+      const daily = k.target / 365;
+      const weekly = k.target / 52;
+      const monthly = k.target / 12;
+      const yearly = k.target;
+
+      const calcPerc = (actual: number, goal: number) => goal > 0 ? ((actual / goal) * 100).toFixed(1) + "%" : "0%";
+
+      rows.push([
+        k.name, 
+        k.unit, 
+        net.toString(),
+        daily.toFixed(2), calcPerc(net, daily),
+        weekly.toFixed(2), calcPerc(net, weekly),
+        monthly.toFixed(2), calcPerc(net, monthly),
+        yearly.toFixed(2), calcPerc(net, yearly)
+      ]);
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `My_Performance_${user!.username}_${now.getTime()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-20 px-2 md:px-0">
       {showUploadModal && <ProfilePhotoModal userId={user!.id} onClose={() => setShowUploadModal(false)} onUpdate={(dataUrl) => login({...user!, profilePic: dataUrl})} />}
@@ -144,11 +214,14 @@ const StaffDashboard: React.FC = () => {
             <button onClick={() => setShowUploadModal(true)} className="absolute -bottom-1 -right-1 bg-blue-600 text-white w-8 h-8 rounded-xl flex items-center justify-center shadow-lg transition-all text-xs border border-[#001f3f]">📷</button>
           </div>
           <div className="min-w-0">
-            <p className="text-blue-400 font-black text-[11px] uppercase tracking-[0.1em] mb-1 Amharic-text">እንደምን ዋሉ፣ {user?.name.split(' ')[0]}! 😊</p>
+            <p className="text-blue-400 font-black text-[11px] uppercase tracking-[0.1em] mb-1 Amharic-text">{getGreeting()}፣ {user?.name.split(' ')[0]}! 😊</p>
             <h2 className="text-2xl font-black text-white uppercase tracking-tighter leading-none mb-2 truncate">{user?.name}</h2>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-2 py-1 rounded-lg">ID: {user?.username}</span>
               <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-2 py-1 rounded-lg">{user?.branch}</span>
+              <button onClick={handleExportCSV} className="text-[8px] font-black text-green-400 uppercase tracking-widest bg-green-900/20 border border-green-500/20 px-2 py-1 rounded-lg hover:bg-green-900/40 transition-all flex items-center gap-1">
+                <span>📊</span> Excel Export
+              </button>
             </div>
           </div>
         </div>
@@ -158,12 +231,19 @@ const StaffDashboard: React.FC = () => {
       </section>
 
       <section className="glass p-8 rounded-[40px] border border-white/10 bg-blue-600/5 animate-fade-up relative">
-        <h3 className="text-xs font-black uppercase tracking-[0.4em] text-blue-400 flex items-center gap-3 mb-6">
-          <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span> Strategic Intelligence Log
-        </h3>
-        {generalAdvice && (
-          <button onClick={() => setGeneralAdvice(null)} className="absolute top-8 right-8 text-[10px] font-black uppercase text-gray-500 hover:text-white">መዝጊያ ✕</button>
-        )}
+        <div className="flex justify-between items-start mb-6">
+          <h3 className="text-xs font-black uppercase tracking-[0.4em] text-blue-400 flex items-center gap-3">
+            <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span> Strategic Intelligence Log
+          </h3>
+          <div className="flex gap-2">
+             <button onClick={playGeneralAdviceAudio} className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${playingGeneralAudio ? 'bg-red-600 animate-pulse text-white' : 'bg-blue-600/10 text-blue-400 hover:bg-blue-600/20'}`} title="Listen to Analysis">
+               {playingGeneralAudio ? '🔇' : '🔊'}
+             </button>
+             {generalAdvice && (
+               <button onClick={() => setGeneralAdvice(null)} className="text-[10px] font-black uppercase text-gray-500 hover:text-white px-2">✕ Close</button>
+             )}
+          </div>
+        </div>
         {loadingGeneral ? (
           <div className="flex items-center gap-4 animate-pulse">
             <div className="w-4 h-4 bg-blue-500/20 rounded-full"></div>
@@ -183,7 +263,6 @@ const StaffDashboard: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {kpis.map(kpi => {
                 const staffEntries = entries.filter(e => e.status === 'authorized');
-                // Net Performance = Deposits - Cash Outs (Outflow templates handle this)
                 const net = staffEntries.reduce((sum, e) => sum + (e.metrics[kpi.name] || 0) - (e.metrics[`${kpi.name} Out`] || 0), 0);
                 const perc = kpi.target > 0 ? Math.round((net / kpi.target) * 100) : 0;
                 
@@ -192,7 +271,10 @@ const StaffDashboard: React.FC = () => {
                     <div className="flex justify-between items-start mb-4">
                       <div>
                         <p className="text-[10px] font-black text-blue-400 uppercase mb-2">{kpi.name}</p>
-                        <p className="text-2xl font-black text-white font-mono leading-none">{net.toLocaleString()} <span className="text-xs text-gray-500">{kpi.unit}</span></p>
+                        <p className="text-2xl font-black text-white font-mono leading-none">
+                          {net.toLocaleString()} <span className="text-xs text-gray-500">{kpi.unit}</span>
+                          <span className={`text-sm ml-2 font-bold ${perc >= 100 ? 'text-green-400' : 'text-amber-400'}`}>({perc}%)</span>
+                        </p>
                       </div>
                       <div className="flex gap-2">
                         <button onClick={() => fetchTips(kpi, net)} className="bg-blue-600/10 hover:bg-blue-600/20 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-blue-500/20">{loadingTips[kpi.id] ? '...' : '✨ AI Tips'}</button>
@@ -209,8 +291,8 @@ const StaffDashboard: React.FC = () => {
                       </div>
                     </div>
                     {kpiTips[kpi.id] && (
-                      <div className="mt-4 p-4 bg-black/40 border border-blue-500/10 rounded-2xl text-[11px] text-gray-300 leading-relaxed whitespace-pre-line Amharic-text relative">
-                        <button onClick={() => { const n = {...kpiTips}; delete n[kpi.id]; setKpiTips(n); }} className="absolute top-2 right-2 text-[8px] text-gray-600 hover:text-white uppercase">መዝጊያ</button>
+                      <div className="mt-4 p-4 bg-black/40 border border-blue-500/10 rounded-2xl text-[11px] text-gray-300 leading-relaxed whitespace-pre-line Amharic-text relative animate-in fade-in">
+                        <button onClick={() => { const n = {...kpiTips}; delete n[kpi.id]; setKpiTips(n); }} className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center bg-white/10 hover:bg-red-500 hover:text-white rounded-full text-[10px] font-bold transition-all">✕</button>
                         {renderMarkdownText(kpiTips[kpi.id])}
                       </div>
                     )}

@@ -31,58 +31,87 @@ export async function decodeAudioData(
   return buffer;
 }
 
+// Helper to detect gender for specific staff members
+const isFemaleStaff = (name: string): boolean => {
+  const lowerName = name.toLowerCase();
+  return ['meron', 'genet', 'selima'].some(n => lowerName.includes(n));
+};
+
 export const getKPICoachingTips = async (kpiName: string, actual: number, target: number, unit: string, staffName: string) => {
   const firstName = staffName.split(' ')[0];
+  const isFemale = isFemaleStaff(staffName);
+  const genderContext = isFemale ? "Address the staff member using female gender grammatical forms in Amharic." : "";
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `You are an elite high-performance coach. Provide exactly 3 short tactical tips in Amharic letters for: "${kpiName}". 
-    Actual: ${actual} ${unit}, Yearly Goal: ${target} ${unit}. 
+    contents: `You are an elite high-performance banking coach. Provide exactly 3 short tactical tips in Amharic letters to help the staff member achieve their OFFICIAL BANK TARGET for: "${kpiName}". 
+    
+    Current Performance: ${actual} ${unit}
+    Assigned Bank Target: ${target} ${unit}
+    ${genderContext}
     
     REQUIREMENTS:
-    - Start with "ጤና ይስጥልኝ ${firstName}," followed by a new line.
-    - Write the tips in clear, professional Amharic letters.
+    - Start the response with "ሰላም ${firstName}," followed by a new line. Do NOT mention the name again in the bullet points.
     - Provide exactly 3 bullet points starting with •.
-    - Include exactly these two educational links: 
-      [የስራ ስነ-ምግባር: Deep Work Guide](https://www.samuelthomasdavies.com/book-summaries/self-help/deep-work/)
-      [የንባብ ምክር: 7 Habits Summary](https://www.hubspot.com/sales/7-habits-of-highly-effective-people-summary)
-    - End with a positive statement in Amharic.`,
+    - Focus strictly on professional strategies to hit the BANK'S KPI. Do NOT mention personal savings, personal life goals, or general motivation.
+    - Write the tips in clear, professional Amharic letters using the "Bank's voice".
+    - End with a motivating statement about contributing to the bank's success in Amharic.`,
   });
   return response.text;
 };
 
 export const getGeneralStaffAdvice = async (staffName: string, performanceSummary: any) => {
   const firstName = staffName.split(' ')[0];
+  const isFemale = isFemaleStaff(staffName);
+  const genderContext = isFemale ? "The staff member is female, use appropriate Amharic grammar." : "";
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Analyze staff performance and provide supportive strategic directions IN AMHARIC LETTERS.
+    contents: `Analyze staff performance against BANK TARGETS and provide supportive strategic directions IN AMHARIC LETTERS.
     Staff: ${staffName}
+    ${genderContext}
     Data: ${JSON.stringify(performanceSummary)}
     
     REQUIREMENTS:
     - Response MUST be in Amharic letters.
     - Start with "የስትራቴጂክ አቅጣጫ ለ ${firstName}:".
-    - Focus on motivation and tactical habits.
-    - Include: [የስራ ስነ-ምግባር: Deep Work Guide](https://www.samuelthomasdavies.com/book-summaries/self-help/deep-work/) and [የንባብ ምክር: 7 Habits Summary](https://www.hubspot.com/sales/7-habits-of-highly-effective-people-summary) to help the staff grow.
-    - Use energetic industrial command language.`,
+    - Focus on professional habits to meet organizational goals.
+    - Use energetic industrial command language suitable for a high-performance banking environment.`,
   });
   return response.text;
 };
 
 export const getStaffSpecificAdvice = async (staffName: string, entries: DailyEntry[], kpis: KPIConfig[]) => {
   const firstName = staffName.split(' ')[0];
+  const isFemale = isFemaleStaff(staffName);
+  const genderContext = isFemale ? "The staff member is female." : "";
+  
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const dataString = JSON.stringify({ staffName, entries, kpis });
+  
+  // Calculate specific underperforming KPIs to highlight
+  // This logic helps the AI focus
+  const underperforming = kpis.filter(k => {
+    const net = entries.reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
+    return k.target > 0 && (net / k.target) < 0.7; // Below 70%
+  }).map(k => k.name).join(", ");
+
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `Analyze performance for ${staffName} and provide a specialized COACHING DIRECTIVE IN AMHARIC LETTERS.
+    contents: `You are advising a Branch Manager or CSM. Analyze the performance data for ${staffName}. ${genderContext}
     
+    KPI Data: ${JSON.stringify(kpis)}
+    Performance Logs: ${JSON.stringify(entries.slice(0, 20))}
+    Underperforming Areas: ${underperforming || "None (All on track)"}
+
     REQUIREMENTS:
-    1. Start with "ለአሰልጣኞች ስትራቴጂክ መመሪያ ለ ${firstName}:"
-    2. Provide achievement analysis in Amharic.
-    3. Include reading motivation: [የንባብ ምክር: 7 Habits Summary](https://www.hubspot.com/sales/7-habits-of-highly-effective-people-summary).
-    4. Maintain an industrial command tone.`,
+    1. Start with "ለአሰልጣኞች ስትራቴጂክ መመሪያ ለ ${firstName}:" (Strategic Coaching Directive for [Name]).
+    2. Identify the specific KPIs where they are falling behind the Bank's target.
+    3. Provide 3 SPECIFIC, ACTIONABLE coaching steps the MANAGER should take with this staff member. 
+       - Example: "Schedule a roleplay session for product X", "Review customer call logs for Y", "Assign a mentor for Z".
+    4. Do not just tell the staff to work harder; tell the Manager *how* to coach them.
+    5. Write in professional Amharic.`,
   });
   return response.text;
 };
@@ -104,9 +133,10 @@ export const getAIPerformanceAnalysis = async (entries: DailyEntry[], kpis: KPIC
 
 export const generateAdviceAudio = async (text: string) => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const cleanText = text.replace(/\[.*?\]\(.*?\)/g, ''); // Remove markdown links for TTS
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text: `Professional coach: ${text}` }] }],
+    contents: [{ parts: [{ text: `Professional coach: ${cleanText}` }] }],
     config: {
       responseModalities: [Modality.AUDIO],
       speechConfig: {
