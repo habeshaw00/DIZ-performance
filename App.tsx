@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { UserProfile, UserRole } from './types';
+import { UserProfile, UserRole, AppLanguage } from './types';
 import LoginView from './views/LoginView';
 import ChangePasscodeView from './views/ChangePasscodeView';
 import UserAgreementView from './views/UserAgreementView';
@@ -25,6 +25,8 @@ interface AuthContextType {
   logout: () => void;
   darkMode: boolean;
   toggleDarkMode: () => void;
+  language: AppLanguage;
+  setLanguage: (lang: AppLanguage) => void;
   mobileMenuOpen: boolean;
   setMobileMenuOpen: (open: boolean) => void;
 }
@@ -100,6 +102,7 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : null;
   });
   const [darkMode, setDarkMode] = useState(true);
+  const [language, setLanguage] = useState<AppLanguage>('am'); // Default to Amharic
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const login = (u: UserProfile) => {
@@ -115,7 +118,12 @@ const App: React.FC = () => {
   const toggleDarkMode = () => setDarkMode(!darkMode);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, darkMode, toggleDarkMode, mobileMenuOpen, setMobileMenuOpen }}>
+    <AuthContext.Provider value={{ 
+      user, login, logout, 
+      darkMode, toggleDarkMode, 
+      language, setLanguage,
+      mobileMenuOpen, setMobileMenuOpen 
+    }}>
       <Router>
         <AppContent />
       </Router>

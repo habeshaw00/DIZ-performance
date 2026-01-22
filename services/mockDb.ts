@@ -94,6 +94,8 @@ class MockDatabase {
   private messages: Message[] = JSON.parse(localStorage.getItem('dukem_messages') || '[]');
   private todos: TodoItem[] = JSON.parse(localStorage.getItem('dukem_todos') || '[]');
   private backupLogs: { date: string; status: string }[] = JSON.parse(localStorage.getItem('dukem_backups') || '[]');
+  // Mock password storage - in real app use secure hashing
+  private passwords: { [id: string]: string } = JSON.parse(localStorage.getItem('dukem_passwords') || '{}');
 
   private persist() {
     localStorage.setItem('dukem_users', JSON.stringify(this.users));
@@ -103,6 +105,7 @@ class MockDatabase {
     localStorage.setItem('dukem_messages', JSON.stringify(this.messages));
     localStorage.setItem('dukem_todos', JSON.stringify(this.todos));
     localStorage.setItem('dukem_backups', JSON.stringify(this.backupLogs));
+    localStorage.setItem('dukem_passwords', JSON.stringify(this.passwords));
   }
 
   exportDatabase() {
@@ -143,13 +146,38 @@ class MockDatabase {
     await new Promise(r => setTimeout(r, 800));
     const user = this.users.find(u => u.username === username);
     if (!user) return null;
+    
+    // Check custom password first
+    if (this.passwords[user.id]) {
+      if (this.passwords[user.id] === passcode) return user;
+      return null;
+    }
+
+    // Default passwords for first login
     if (passcode === '1234' || passcode === `${username}123` || user.passcodeSet) return user;
     return null;
   }
 
-  async updatePasscode(userId: string): Promise<void> {
+  async updatePasscode(userId: string, newPasscode: string): Promise<void> {
     const user = this.users.find(u => u.id === userId);
-    if (user) { user.passcodeSet = true; this.persist(); }
+    if (user) { 
+      user.passcodeSet = true; 
+      this.passwords[userId] = newPasscode;
+      this.persist(); 
+    }
+  }
+
+  async changePassword(userId: string, oldPass: string, newPass: string): Promise<boolean> {
+    const user = this.users.find(u => u.id === userId);
+    if (!user) return false;
+    
+    // Check old password
+    const currentPass = this.passwords[userId] || '1234'; // Default fallback if not set properly in mock
+    if (currentPass !== oldPass && user.passcodeSet) return false;
+    
+    this.passwords[userId] = newPass;
+    this.persist();
+    return true;
   }
 
   async acceptAgreement(userId: string): Promise<void> {
@@ -210,17 +238,28 @@ class MockDatabase {
   }
 
   getKPIsForUser(email: string) { 
-    return this.kpis.filter(k => k.assignedToEmail === email && k.status === 'approved'); 
+    // Return approved, pending signature, and pending approval (so staff can see wait status)
+    return this.kpis.filter(k => k.assignedToEmail === email && (k.status === 'approved' || k.status === 'pending_signature' || k.status === 'pending_approval')); 
   }
 
-  getPendingKPIs() { return this.kpis.filter(k => k.status === 'pending'); }
+  getPendingKPIs() { return this.kpis.filter(k => k.status !== 'approved'); }
   getAllKPIs() { return this.kpis; }
 
   addKPI(kpi: Omit<KPIConfig, 'id'>) {
-    const newKpi = { ...kpi, id: Math.random().toString(36).substr(2, 9) } as KPIConfig;
+    const newKpi = { ...kpi, id: Math.random().toString(36).substr(2, 9), status: 'pending_signature', signedByStaff: false } as KPIConfig;
     this.kpis.push(newKpi);
     this.persist();
     return newKpi;
+  }
+
+  staffSignKPI(id: string) {
+    const kpi = this.kpis.find(k => k.id === id);
+    if (kpi) {
+      kpi.status = 'pending_approval';
+      kpi.signedByStaff = true;
+      kpi.signedAt = new Date().toISOString();
+      this.persist();
+    }
   }
 
   approveKPI(id: string) {
@@ -229,7 +268,8 @@ class MockDatabase {
   }
 
   approveAllKPIs() {
-    this.kpis = this.kpis.map(k => ({ ...k, status: 'approved' }));
+    // Only approve those that have been signed by staff
+    this.kpis = this.kpis.map(k => k.status === 'pending_approval' ? { ...k, status: 'approved' } : k);
     this.persist();
   }
 

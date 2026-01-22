@@ -3,12 +3,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../App';
 import { db } from '../services/mockDb';
 import { getKPICoachingTips, generateAdviceAudio, decode, decodeAudioData, getAIFocusAlertTips, getGeneralStaffAdvice } from '../services/geminiService';
-import { APP_CONFIG, MOTIVATIONAL_QUOTES_AMHARIC } from '../constants';
-import { KPIConfig, DailyEntry, TodoItem } from '../types';
+import { APP_CONFIG, MOTIVATIONAL_QUOTES } from '../constants';
+import { KPIConfig, DailyEntry, TodoItem, AppLanguage } from '../types';
 import ProfilePhotoModal from '../components/ProfilePhotoModal';
 
 const StaffDashboard: React.FC = () => {
-  const { user, login } = useAuth();
+  const { user, login, language } = useAuth();
   const [kpis, setKpis] = useState<KPIConfig[]>([]);
   const [entries, setEntries] = useState<DailyEntry[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -25,6 +25,7 @@ const StaffDashboard: React.FC = () => {
   const [metricInValue, setMetricInValue] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [aiFeedback, setAiFeedback] = useState<string | null>(null);
+  const [acceptedTerms, setAcceptedTerms] = useState<{ [kpiId: string]: boolean }>({});
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -32,22 +33,39 @@ const StaffDashboard: React.FC = () => {
   const [playingGeneralAudio, setPlayingGeneralAudio] = useState(false);
 
   useEffect(() => {
+    refreshData();
+    // Set random quote on mount/login based on language
+    const currentQuotes = MOTIVATIONAL_QUOTES[language] || MOTIVATIONAL_QUOTES.en;
+    setPerfNote(currentQuotes[Math.floor(Math.random() * currentQuotes.length)]);
+    return () => stopAudio();
+  }, [user, language]); 
+
+  const refreshData = () => {
     const data = db.getKPIsForUser(user!.email);
     setKpis(data);
     const staffEntries = db.getEntriesForStaff(user!.id);
     setEntries(staffEntries);
     setTodos(db.getTodosForStaff(user!.id));
     
-    // Set random quote on mount/login to ensure freshness
-    const randomQuote = MOTIVATIONAL_QUOTES_AMHARIC[Math.floor(Math.random() * MOTIVATIONAL_QUOTES_AMHARIC.length)];
-    setPerfNote(randomQuote);
-    
-    if (data.length > 0) fetchGeneralAnalysis(data, staffEntries);
-    return () => stopAudio();
-  }, [user]);
+    // Auto-fetch general advice if we have approved KPIs
+    const approved = data.filter(k => k.status === 'approved');
+    if (approved.length > 0) fetchGeneralAnalysis(approved, staffEntries);
+  };
 
   const getGreeting = () => {
     const hour = new Date().getHours();
+    
+    if (language === 'en') {
+        if (hour >= 5 && hour < 12) return "Good Morning";
+        if (hour >= 12 && hour < 18) return "Good Afternoon";
+        return "Good Evening";
+    }
+    if (language === 'om') {
+        if (hour >= 5 && hour < 12) return "Akkam Bultan";
+        if (hour >= 12 && hour < 18) return "Akkam Ooltan";
+        return "Akkam Bultan"; // Evening greeting similar context
+    }
+    // Default Amharic
     if (hour >= 5 && hour < 12) return "እንደምን አደሩ";
     if (hour >= 12 && hour < 18) return "እንደምን ዋሉ";
     return "እንደምን አመሹ";
@@ -60,7 +78,7 @@ const StaffDashboard: React.FC = () => {
         const net = staffEntries.reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
         return { name: k.name, net, target: k.target };
       });
-      const advice = await getGeneralStaffAdvice(user!.name, summary);
+      const advice = await getGeneralStaffAdvice(user!.name, summary, language);
       setGeneralAdvice(advice);
     } catch (e) {
       setGeneralAdvice("Focus on maintaining consistency.");
@@ -116,7 +134,7 @@ const StaffDashboard: React.FC = () => {
   const fetchTips = async (kpi: KPIConfig, actual: number) => {
     setLoadingTips(prev => ({ ...prev, [kpi.id]: true }));
     try {
-      const tips = await getKPICoachingTips(kpi.name, actual, kpi.target, kpi.unit, user!.name);
+      const tips = await getKPICoachingTips(kpi.name, actual, kpi.target, kpi.unit, user!.name, language);
       setKpiTips(prev => ({ ...prev, [kpi.id]: tips }));
     } catch (e) { alert("AI Sync Error."); } finally { setLoadingTips(prev => ({ ...prev, [kpi.id]: false })); }
   };
@@ -153,11 +171,21 @@ const StaffDashboard: React.FC = () => {
     setIsSubmitting(true);
     try {
       db.addEntry({ staffId: user!.id, staffName: user!.name, date: new Date().toISOString().split('T')[0], metrics: stagedMetrics, status: 'pending' });
-      const feedback = await getAIFocusAlertTips(user!.name, stagedMetrics, kpis);
+      const feedback = await getAIFocusAlertTips(user!.name, stagedMetrics, kpis, language);
       setAiFeedback(feedback);
       setEntries(db.getEntriesForStaff(user!.id));
       setStagedMetrics({});
     } catch (err) { alert("Relay error."); } finally { setIsSubmitting(false); }
+  };
+
+  const toggleTermAcceptance = (id: string) => {
+    setAcceptedTerms(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleSignContract = (kpiId: string) => {
+    if (!acceptedTerms[kpiId]) return;
+    db.staffSignKPI(kpiId);
+    refreshData();
   };
 
   const handleExportCSV = () => {
@@ -170,7 +198,7 @@ const StaffDashboard: React.FC = () => {
       ["KPI NAME", "UNIT", "NET ACTUAL", "DAILY GOAL", "DAILY %", "WEEKLY GOAL", "WEEKLY %", "MONTHLY GOAL", "MONTHLY %", "YEARLY GOAL", "YEARLY %"]
     ];
 
-    kpis.forEach(k => {
+    kpis.filter(k => k.status === 'approved').forEach(k => {
       const net = entries.filter(e => e.status === 'authorized').reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
       
       const daily = k.target / 365;
@@ -201,6 +229,54 @@ const StaffDashboard: React.FC = () => {
     document.body.removeChild(link);
   };
 
+  const calculateTimeFrameMetrics = (kpiName: string, allEntries: DailyEntry[]) => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    
+    // Get start of current week (Monday)
+    const d = new Date(now);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
+    const monday = new Date(d.setDate(diff));
+    monday.setHours(0,0,0,0);
+
+    let yearly = 0;
+    let monthly = 0;
+    let weekly = 0;
+
+    allEntries.filter(e => e.status === 'authorized').forEach(e => {
+        const entryDate = new Date(e.date);
+        const val = (e.metrics[kpiName] || 0) - (e.metrics[`${kpiName} Out`] || 0);
+
+        if (entryDate.getFullYear() === currentYear) {
+            yearly += val;
+            if (entryDate.getMonth() === currentMonth) {
+                monthly += val;
+            }
+            if (entryDate >= monday) {
+                weekly += val;
+            }
+        }
+    });
+
+    return { yearly, monthly, weekly };
+  };
+
+  const renderProgressBar = (actual: number, target: number) => {
+    const perc = target > 0 ? Math.min(Math.round((actual / target) * 100), 100) : 0;
+    const color = perc >= 100 ? 'bg-green-500' : perc >= 50 ? 'bg-yellow-500' : 'bg-red-500';
+    return (
+      <div className="h-1 bg-white/10 rounded-full overflow-hidden w-full mt-1">
+        <div className={`h-full transition-all duration-1000 ${color}`} style={{ width: `${perc}%` }}></div>
+      </div>
+    );
+  };
+
+  const pendingSignatureKPIs = kpis.filter(k => k.status === 'pending_signature');
+  const pendingApprovalKPIs = kpis.filter(k => k.status === 'pending_approval');
+  const approvedKPIs = kpis.filter(k => k.status === 'approved');
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-20 px-2 md:px-0">
       {showUploadModal && <ProfilePhotoModal userId={user!.id} onClose={() => setShowUploadModal(false)} onUpdate={(dataUrl) => login({...user!, profilePic: dataUrl})} />}
@@ -229,6 +305,69 @@ const StaffDashboard: React.FC = () => {
           <p className="text-sm md:text-base font-bold leading-relaxed px-6 Amharic-text text-blue-100 italic">"{perfNote}"</p>
         </div>
       </section>
+
+      {/* KPI Signature Alert Section */}
+      {(pendingSignatureKPIs.length > 0 || pendingApprovalKPIs.length > 0) && (
+        <section className="glass p-8 rounded-[40px] border border-amber-500/30 bg-amber-600/10 animate-fade-up shadow-3xl">
+          <div className="flex items-center gap-4 mb-6">
+             <div className="w-10 h-10 bg-amber-600/20 rounded-xl flex items-center justify-center text-2xl animate-bounce">✍️</div>
+             <div>
+                <h3 className="text-lg font-black uppercase text-amber-500 tracking-tight">Pending Strategic Targets</h3>
+                <p className="text-[10px] text-amber-200/60 font-bold uppercase tracking-widest">Please review and sign your new performance contracts</p>
+             </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Active Signing Required */}
+            {pendingSignatureKPIs.map(k => (
+              <div key={k.id} className="bg-black/40 p-6 rounded-3xl border border-amber-500/20 relative overflow-hidden flex flex-col">
+                 <div className="flex justify-between items-start mb-4">
+                    <div>
+                       <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{k.name}</p>
+                       <p className="text-2xl font-black text-white font-mono">{k.target.toLocaleString()} <span className="text-xs text-gray-500">{k.unit}</span></p>
+                    </div>
+                 </div>
+                 
+                 <div className="mt-auto space-y-3">
+                    <div 
+                      onClick={() => toggleTermAcceptance(k.id)}
+                      className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${acceptedTerms[k.id] ? 'bg-amber-600/20 border-amber-500/50' : 'bg-white/5 border-white/10 hover:border-white/20'}`}
+                    >
+                       <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all ${acceptedTerms[k.id] ? 'bg-amber-500 border-amber-500 text-black' : 'border-gray-500'}`}>
+                          {acceptedTerms[k.id] && <span className="font-bold text-xs">✓</span>}
+                       </div>
+                       <p className="text-[9px] font-black uppercase text-gray-300">Seen & Signed</p>
+                    </div>
+
+                    <button 
+                      onClick={() => handleSignContract(k.id)} 
+                      disabled={!acceptedTerms[k.id]}
+                      className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:bg-gray-700 py-3 rounded-xl font-black uppercase text-[10px] text-white shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      Send Back to Approver
+                    </button>
+                 </div>
+              </div>
+            ))}
+
+            {/* Waiting for Approval */}
+            {pendingApprovalKPIs.map(k => (
+              <div key={k.id} className="bg-black/20 p-6 rounded-3xl border border-white/5 relative overflow-hidden opacity-75">
+                 <div className="flex justify-between items-start mb-4">
+                    <div>
+                       <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-1">{k.name}</p>
+                       <p className="text-xl font-black text-gray-400 font-mono">{k.target.toLocaleString()} <span className="text-xs text-gray-600">{k.unit}</span></p>
+                    </div>
+                 </div>
+                 <div className="mt-4 flex items-center gap-2 p-3 bg-white/5 rounded-xl border border-white/5">
+                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                    <p className="text-[9px] font-black uppercase text-yellow-500 tracking-widest">Sent • Waiting Approval</p>
+                 </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="glass p-8 rounded-[40px] border border-white/10 bg-blue-600/5 animate-fade-up relative">
         <div className="flex justify-between items-start mb-6">
@@ -261,35 +400,53 @@ const StaffDashboard: React.FC = () => {
           <div className="glass p-8 rounded-[40px] border border-white/5 bg-[#000d1a]/20 shadow-2xl">
             <h3 className="text-xs font-black uppercase tracking-[0.3em] text-blue-400 flex items-center gap-3 mb-10">የሥራ አፈጻጸም ማዕከል</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {kpis.map(kpi => {
-                const staffEntries = entries.filter(e => e.status === 'authorized');
-                const net = staffEntries.reduce((sum, e) => sum + (e.metrics[kpi.name] || 0) - (e.metrics[`${kpi.name} Out`] || 0), 0);
-                const perc = kpi.target > 0 ? Math.round((net / kpi.target) * 100) : 0;
+              {approvedKPIs.map(kpi => {
+                const { yearly, monthly, weekly } = calculateTimeFrameMetrics(kpi.name, entries);
+                
+                const yearlyTarget = kpi.target;
+                const monthlyTarget = yearlyTarget / 12;
+                const weeklyTarget = yearlyTarget / 52;
+
+                const yearlyPerc = yearlyTarget > 0 ? Math.round((yearly / yearlyTarget) * 100) : 0;
+                const monthlyPerc = monthlyTarget > 0 ? Math.round((monthly / monthlyTarget) * 100) : 0;
+                const weeklyPerc = weeklyTarget > 0 ? Math.round((weekly / weeklyTarget) * 100) : 0;
                 
                 return (
-                  <div key={kpi.id} className="bg-[#001f3f]/40 p-6 rounded-[32px] border border-white/5 group transition-all">
+                  <div key={kpi.id} className="bg-[#001f3f]/40 p-6 rounded-[32px] border border-white/5 group transition-all hover:bg-[#001f3f]/60">
                     <div className="flex justify-between items-start mb-4">
                       <div>
-                        <p className="text-[10px] font-black text-blue-400 uppercase mb-2">{kpi.name}</p>
+                        <p className="text-[10px] font-black text-blue-400 uppercase mb-2 truncate max-w-[150px]">{kpi.name}</p>
                         <p className="text-2xl font-black text-white font-mono leading-none">
-                          {net.toLocaleString()} <span className="text-xs text-gray-500">{kpi.unit}</span>
-                          <span className={`text-sm ml-2 font-bold ${perc >= 100 ? 'text-green-400' : 'text-amber-400'}`}>({perc}%)</span>
+                          {yearly.toLocaleString()} <span className="text-xs text-gray-500">{kpi.unit}</span>
                         </p>
                       </div>
                       <div className="flex gap-2">
-                        <button onClick={() => fetchTips(kpi, net)} className="bg-blue-600/10 hover:bg-blue-600/20 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-blue-500/20">{loadingTips[kpi.id] ? '...' : '✨ AI Tips'}</button>
-                        {kpiTips[kpi.id] && <button onClick={() => playAdvice(kpi.id, kpiTips[kpi.id])} className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${readingId === kpi.id ? 'bg-red-600 animate-pulse' : 'bg-blue-600/10 border border-blue-500/20'}`}>{readingId === kpi.id ? '🔇' : '🔊'}</button>}
+                        <button onClick={() => fetchTips(kpi, yearly)} className="bg-blue-600/10 hover:bg-blue-600/20 px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border border-blue-500/20">AI Tips</button>
+                        {kpiTips[kpi.id] && <button onClick={() => playAdvice(kpi.id, kpiTips[kpi.id])} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${readingId === kpi.id ? 'bg-red-600 animate-pulse' : 'bg-blue-600/10 border border-blue-500/20'}`}>{readingId === kpi.id ? '🔇' : '🔊'}</button>}
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center text-[9px] font-black uppercase">
-                        <span className="text-gray-500">Progress to Goal</span>
-                        <span className={perc >= 100 ? 'text-green-400' : 'text-blue-300'}>{perc}%</span>
-                      </div>
-                      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                        <div className={`h-full transition-all duration-1000 ${perc >= 100 ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-blue-600'}`} style={{ width: `${Math.min(perc, 100)}%` }}></div>
-                      </div>
+
+                    <div className="grid grid-cols-3 gap-2 mt-4 bg-black/20 p-2 rounded-2xl border border-white/5">
+                        <div className="text-center p-1">
+                            <p className="text-[8px] text-gray-500 font-bold uppercase mb-1">Weekly</p>
+                            <p className={`text-[10px] font-black ${weeklyPerc >= 100 ? 'text-green-400' : weeklyPerc >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{weeklyPerc}%</p>
+                            <p className="text-[8px] text-gray-600 font-mono">{weekly.toLocaleString()}</p>
+                            {renderProgressBar(weekly, weeklyTarget)}
+                        </div>
+                        <div className="text-center p-1 border-l border-white/5 border-r">
+                            <p className="text-[8px] text-gray-500 font-bold uppercase mb-1">Monthly</p>
+                            <p className={`text-[10px] font-black ${monthlyPerc >= 100 ? 'text-green-400' : monthlyPerc >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{monthlyPerc}%</p>
+                            <p className="text-[8px] text-gray-600 font-mono">{monthly.toLocaleString()}</p>
+                            {renderProgressBar(monthly, monthlyTarget)}
+                        </div>
+                        <div className="text-center p-1">
+                            <p className="text-[8px] text-gray-500 font-bold uppercase mb-1">Yearly</p>
+                            <p className={`text-[10px] font-black ${yearlyPerc >= 100 ? 'text-green-400' : yearlyPerc >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{yearlyPerc}%</p>
+                            <p className="text-[8px] text-gray-600 font-mono">{yearly.toLocaleString()}</p>
+                            {renderProgressBar(yearly, yearlyTarget)}
+                        </div>
                     </div>
+
                     {kpiTips[kpi.id] && (
                       <div className="mt-4 p-4 bg-black/40 border border-blue-500/10 rounded-2xl text-[11px] text-gray-300 leading-relaxed whitespace-pre-line Amharic-text relative animate-in fade-in">
                         <button onClick={() => { const n = {...kpiTips}; delete n[kpi.id]; setKpiTips(n); }} className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center bg-white/10 hover:bg-red-500 hover:text-white rounded-full text-[10px] font-bold transition-all">✕</button>

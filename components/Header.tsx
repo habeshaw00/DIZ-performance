@@ -1,10 +1,13 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../App';
 import { APP_CONFIG } from '../constants';
+import { AppLanguage } from '../types';
+import ChangePasswordModal from './ChangePasswordModal';
 
 const Header: React.FC = () => {
-  const { user, toggleDarkMode, darkMode, logout, setMobileMenuOpen } = useAuth();
+  const { user, toggleDarkMode, darkMode, logout, setMobileMenuOpen, language, setLanguage } = useAuth();
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   return (
     <header className={`h-16 px-4 md:px-6 flex items-center justify-between border-b ${darkMode ? 'border-white/10 bg-[#001f3f]' : 'border-gray-200 bg-white shadow-sm'}`}>
@@ -25,13 +28,25 @@ const Header: React.FC = () => {
       </div>
       
       <div className="flex items-center gap-2 md:gap-6">
+        <div className="flex items-center">
+          <select 
+            value={language}
+            onChange={(e) => setLanguage(e.target.value as AppLanguage)}
+            className="bg-transparent text-[10px] md:text-xs font-black uppercase text-blue-400 border border-blue-500/20 rounded-lg px-2 py-1 outline-none focus:border-blue-500 cursor-pointer"
+          >
+            <option value="am" className="text-black">🇪🇹 Amharic</option>
+            <option value="en" className="text-black">🇺🇸 English</option>
+            <option value="om" className="text-black">🌳 Oromiffaa</option>
+          </select>
+        </div>
+
         <div className="flex items-center gap-3 pr-2 md:pr-4 border-r border-white/10">
           <div className="text-right hidden sm:block">
             <p className="text-sm font-black leading-none uppercase truncate max-w-[120px]">{user?.name}</p>
-            <p className="text-[9px] text-blue-400 font-bold uppercase tracking-widest mt-1.5 truncate max-w-[150px]">{user?.email}</p>
+            <button onClick={() => setShowPasswordModal(true)} className="text-[9px] text-blue-400 font-bold uppercase tracking-widest mt-1.5 hover:underline text-left">Change Passcode</button>
           </div>
           
-          <div className="w-8 h-8 md:w-9 md:h-9 rounded-xl overflow-hidden border border-blue-500/30 flex items-center justify-center font-bold text-sm bg-blue-600 text-white">
+          <div onClick={() => setShowPasswordModal(true)} className="cursor-pointer w-8 h-8 md:w-9 md:h-9 rounded-xl overflow-hidden border border-blue-500/30 flex items-center justify-center font-bold text-sm bg-blue-600 text-white">
             {user?.profilePic ? <img src={user.profilePic} className="w-full h-full object-cover" /> : user?.name.charAt(0)}
           </div>
         </div>
@@ -45,6 +60,7 @@ const Header: React.FC = () => {
           </button>
         </div>
       </div>
+      {showPasswordModal && <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />}
     </header>
   );
 };

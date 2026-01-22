@@ -17,7 +17,7 @@ const ChangePasscodeView: React.FC = () => {
       return;
     }
     
-    await db.updatePasscode(user!.id);
+    await db.updatePasscode(user!.id, newPass);
     const updatedUser = { ...user!, passcodeSet: true };
     login(updatedUser);
     navigate('/');

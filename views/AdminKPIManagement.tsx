@@ -21,15 +21,21 @@ const AdminKPIManagement: React.FC = () => {
 
   const refreshData = () => {
     let allKPIs = db.getAllKPIs();
-    let allUsers = db.getAllUsers().filter(u => u.id !== user?.id);
-    
+    let allUsers = db.getAllUsers(); // Managers see everyone, including CSMs
+
     if (user?.role === UserRole.CSM) {
-      // Domain filtering for CSM oversight
+      // Domain filtering for CSM oversight - Only assign to direct reports (Selima, Meron, Sanbata)
+      // Relying on supervisorId link established in mockDb
       allUsers = allUsers.filter(u => u.supervisorId === user.id);
+      
+      // CSM sees KPIs for their direct reports
       allKPIs = allKPIs.filter(k => {
         const staffNode = db.getAllUsers().find(u => u.email === k.assignedToEmail);
         return staffNode && staffNode.supervisorId === user.id;
       });
+    } else if (user?.role === UserRole.MANAGER) {
+      // Manager sees all KPIs but usually doesn't assign to themselves
+       allUsers = allUsers.filter(u => u.id !== user.id);
     }
 
     setKpis(allKPIs);
@@ -42,15 +48,11 @@ const AdminKPIManagement: React.FC = () => {
     
     const template = APP_CONFIG.STANDARD_KPI_TEMPLATES[parseInt(newKpi.templateIndex)];
     
-    // Duplicate assignment protection logic
     const existing = kpis.find(k => k.name === template.name && k.assignedToEmail === newKpi.assignedToEmail);
     if (existing) {
-      if (window.confirm(`OVERRIDE WARNING: This objective is already assigned to this node. Do you want to override the existing target of ${existing.target} with ${newKpi.target}?`)) {
-        db.updateKPI(existing.id, { target: parseFloat(newKpi.target) });
-        refreshData();
-        setNewKpi({ templateIndex: '', target: '', assignedToEmail: '', timeFrame: 'Yearly' });
-      }
-      return;
+       // Logic for overriding exists, but typically we want fresh assignments or explicit edits
+       alert("This objective is already assigned. Use the edit function to modify targets.");
+       return;
     }
 
     db.addKPI({
@@ -60,14 +62,14 @@ const AdminKPIManagement: React.FC = () => {
       unit: template.unit,
       measure: template.measure,
       timeFrame: 'Yearly',
-      status: 'pending',
+      status: 'pending_signature', // Initial status
       createdBy: user!.name,
       isDeposit: (template as any).isDeposit,
       isOutflow: (template as any).isOutflow
     });
     setNewKpi({ templateIndex: '', target: '', assignedToEmail: '', timeFrame: 'Yearly' });
     refreshData();
-    alert("Strategic Objective Transmitted to Node.");
+    alert("Strategic Objective Transmitted to Node for Signature.");
   };
 
   const handleUpdate = (e: React.FormEvent) => {
@@ -79,10 +81,9 @@ const AdminKPIManagement: React.FC = () => {
     alert("Strategic Directive Updated.");
   };
 
-  const handleApproveAll = () => {
-    if (window.confirm('Authorize all pending domain objectives?')) {
-      const pendingIds = kpis.filter(k => k.status === 'pending').map(k => k.id);
-      pendingIds.forEach(id => db.approveKPI(id));
+  const handleApproveAllSigned = () => {
+    if (window.confirm('Authorize all SIGNED domain objectives?')) {
+      db.approveAllKPIs(); // Only approves those in 'pending_approval' state
       refreshData();
     }
   };
@@ -99,6 +100,20 @@ const AdminKPIManagement: React.FC = () => {
     refreshData();
   };
 
+  // Helper to check edit rights
+  const canEdit = (kpi: KPIConfig) => {
+    if (user?.role === UserRole.MANAGER) return true; // Manager can edit anything
+    if (user?.role === UserRole.CSM) {
+        // CSM can only edit if NOT approved yet
+        return kpi.status !== 'approved'; 
+    }
+    return false;
+  };
+
+  const pendingSignature = kpis.filter(k => k.status === 'pending_signature');
+  const pendingApproval = kpis.filter(k => k.status === 'pending_approval');
+  const approved = kpis.filter(k => k.status === 'approved');
+
   return (
     <div className="space-y-6 animate-fade-up max-w-7xl mx-auto pb-20">
       <div className="flex flex-col sm:flex-row justify-between items-center bg-[#001226]/60 p-8 rounded-[40px] border border-white/10 shadow-2xl backdrop-blur-xl gap-6">
@@ -108,7 +123,7 @@ const AdminKPIManagement: React.FC = () => {
             {user?.role === UserRole.CSM ? 'CSM Domain Control' : 'Global Hub Oversight'}
           </p>
         </div>
-        <button onClick={handleApproveAll} className="w-full sm:w-auto bg-green-600 hover:bg-green-500 px-8 py-4 rounded-2xl font-black uppercase tracking-[0.2em] text-[10px] shadow-lg transition-all active:scale-95">Authorize All Pending</button>
+        <button onClick={handleApproveAllSigned} disabled={pendingApproval.length === 0} className="w-full sm:w-auto bg-green-600 hover:bg-green-500 disabled:opacity-50 px-8 py-4 rounded-2xl font-black uppercase tracking-[0.2em] text-[10px] shadow-lg transition-all active:scale-95">Authorize Signed Targets</button>
       </div>
 
       <div className="glass p-8 md:p-12 rounded-[48px] border border-white/10 bg-[#000d1a]/40 shadow-xl">
@@ -132,7 +147,7 @@ const AdminKPIManagement: React.FC = () => {
               {staff.map(s => <option key={s.id} value={s.email}>{s.name} ({s.role})</option>)}
             </select>
           </div>
-          <button className="w-full bg-blue-700 hover:bg-blue-600 py-5 rounded-2xl font-black uppercase tracking-widest text-[9px] transition-all shadow-xl active:scale-95">Assign Objective</button>
+          <button className="w-full bg-blue-700 hover:bg-blue-600 py-5 rounded-2xl font-black uppercase tracking-widest text-[9px] transition-all shadow-xl active:scale-95">Transmit for Signature</button>
         </form>
       </div>
 
@@ -144,12 +159,12 @@ const AdminKPIManagement: React.FC = () => {
                 <th className="px-10 py-6">Node Personnel</th>
                 <th className="px-10 py-6">Strategic objective</th>
                 <th className="px-10 py-6">Target Plan</th>
-                <th className="px-10 py-6">Status</th>
+                <th className="px-10 py-6">Workflow Status</th>
                 <th className="px-10 py-6 text-right">Strategic Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {kpis.map(kpi => {
+              {[...pendingApproval, ...pendingSignature, ...approved].map(kpi => {
                 const s = db.getAllUsers().find(x => x.email === kpi.assignedToEmail);
                 return (
                   <tr key={kpi.id} className="group hover:bg-white/[0.03] transition-all">
@@ -160,17 +175,27 @@ const AdminKPIManagement: React.FC = () => {
                     <td className="px-10 py-6 text-[11px] text-blue-300 font-bold uppercase truncate max-w-[200px]">{kpi.name}</td>
                     <td className="px-10 py-6 font-black text-xs text-white font-mono">{kpi.target.toLocaleString()} <span className="text-[8px] text-gray-500">{kpi.unit}</span></td>
                     <td className="px-10 py-6">
-                      <span className={`px-4 py-1 rounded-full text-[8px] font-black uppercase tracking-widest border ${kpi.status === 'approved' ? 'bg-green-600/10 text-green-400 border-green-500/20' : 'bg-amber-600/10 text-amber-500 border-amber-500/20 animate-pulse'}`}>
-                        {kpi.status}
-                      </span>
+                      {kpi.status === 'pending_signature' && (
+                          <span className="px-4 py-1 rounded-full text-[8px] font-black uppercase tracking-widest bg-gray-600/10 text-gray-400 border border-gray-500/20">Awaiting Staff Sign</span>
+                      )}
+                      {kpi.status === 'pending_approval' && (
+                          <span className="px-4 py-1 rounded-full text-[8px] font-black uppercase tracking-widest bg-amber-600/10 text-amber-500 border border-amber-500/20 animate-pulse">Staff Signed • Pending Auth</span>
+                      )}
+                      {kpi.status === 'approved' && (
+                          <span className="px-4 py-1 rounded-full text-[8px] font-black uppercase tracking-widest bg-green-600/10 text-green-400 border border-green-500/20">Active / Approved</span>
+                      )}
                     </td>
                     <td className="px-10 py-6 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {kpi.status === 'pending' && (
-                          <button onClick={() => handleApprove(kpi.id)} className="p-2 bg-green-600/20 text-green-400 rounded-lg hover:bg-green-600 hover:text-white transition-all text-[10px]" title="Approve">✅</button>
+                        {kpi.status === 'pending_approval' && (
+                          <button onClick={() => handleApprove(kpi.id)} className="p-2 bg-green-600/20 text-green-400 rounded-lg hover:bg-green-600 hover:text-white transition-all text-[10px]" title="Final Authorization">✅</button>
                         )}
-                        <button onClick={() => setEditingKpi(kpi)} className="p-2 bg-blue-600/20 text-blue-400 rounded-lg hover:bg-blue-600 hover:text-white transition-all text-[10px]" title="Edit Target">✏️</button>
-                        <button onClick={() => handleDelete(kpi.id)} className="p-2 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600 hover:text-white transition-all text-[10px]" title="Delete Objective">🗑️</button>
+                        {canEdit(kpi) && (
+                            <>
+                                <button onClick={() => setEditingKpi(kpi)} className="p-2 bg-blue-600/20 text-blue-400 rounded-lg hover:bg-blue-600 hover:text-white transition-all text-[10px]" title="Unlock & Edit">✏️</button>
+                                <button onClick={() => handleDelete(kpi.id)} className="p-2 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600 hover:text-white transition-all text-[10px]" title="Remove Directive">🗑️</button>
+                            </>
+                        )}
                       </div>
                     </td>
                   </tr>

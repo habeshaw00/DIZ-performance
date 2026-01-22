@@ -20,7 +20,7 @@ import { useAuth } from '../App';
 import ProfilePhotoModal from '../components/ProfilePhotoModal';
 
 const ManagerDashboard: React.FC = () => {
-  const { user, login } = useAuth();
+  const { user, login, language } = useAuth();
   const [entries, setEntries] = useState<DailyEntry[]>([]);
   const [kpis, setKpis] = useState<KPIConfig[]>([]);
   const [staff, setStaff] = useState<UserProfile[]>([]);
@@ -234,7 +234,7 @@ const ManagerDashboard: React.FC = () => {
     try {
       const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
       const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-      const advice = await getStaffSpecificAdvice(s.name, sEntries, sKPIs);
+      const advice = await getStaffSpecificAdvice(s.name, sEntries, sKPIs, language);
       setStaffAdvice(advice);
     } catch (err) {
       setStaffAdvice("Tactical analysis error.");
@@ -282,7 +282,7 @@ const ManagerDashboard: React.FC = () => {
             </div>
           </div>
         </div>
-        <button onClick={async () => { setLoadingAI(true); const r = await getAIPerformanceAnalysis(entries, kpis, user?.role === UserRole.CSM); setAiReport(r); setLoadingAI(false); }} disabled={loadingAI} className="bg-indigo-600 hover:bg-indigo-500 px-10 py-5 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-[0.98]">
+        <button onClick={async () => { setLoadingAI(true); const r = await getAIPerformanceAnalysis(entries, kpis, user?.role === UserRole.CSM, language); setAiReport(r); setLoadingAI(false); }} disabled={loadingAI} className="bg-indigo-600 hover:bg-indigo-500 px-10 py-5 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-[0.98]">
           {loadingAI ? '🤖 SYNCING...' : '✨ Intelligence Sync'}
         </button>
       </section>

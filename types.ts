@@ -5,6 +5,8 @@ export enum UserRole {
   CSM = 'CSM'
 }
 
+export type AppLanguage = 'en' | 'am' | 'om';
+
 export interface UserProfile {
   id: string;
   username: string;
@@ -29,8 +31,10 @@ export interface KPIConfig {
   unit: string;
   measure: string;
   timeFrame: 'Daily' | 'Weekly' | 'Monthly' | 'Quarterly' | 'Yearly';
-  status: 'pending' | 'approved';
+  status: 'pending_signature' | 'pending_approval' | 'approved';
   createdBy: string;
+  signedByStaff?: boolean;
+  signedAt?: string;
   isDeposit?: boolean;
   isOutflow?: boolean;
 }
@@ -51,6 +55,7 @@ export interface TodoItem {
   task: string;
   completed: boolean;
   createdAt: string;
+  staffName?: string;
 }
 
 export interface Feedback {
