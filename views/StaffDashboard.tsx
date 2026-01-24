@@ -2,7 +2,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../App';
 import { db } from '../services/mockDb';
-import { getKPICoachingTips, generateAdviceAudio, decode, decodeAudioData, getAIFocusAlertTips, getGeneralStaffAdvice } from '../services/geminiService';
+import { 
+  getKPICoachingTips, 
+  generateAdviceAudio, 
+  decode, 
+  decodeAudioData, 
+  getAIFocusAlertTips, 
+  getGeneralStaffAdvice, 
+  getServiceCultureAdvice,
+  getHabitBuildingPlan 
+} from '../services/geminiService';
 import { APP_CONFIG, MOTIVATIONAL_QUOTES } from '../constants';
 import { KPIConfig, DailyEntry, TodoItem, AppLanguage } from '../types';
 import ProfilePhotoModal from '../components/ProfilePhotoModal';
@@ -27,6 +36,14 @@ const StaffDashboard: React.FC = () => {
   const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [acceptedTerms, setAcceptedTerms] = useState<{ [kpiId: string]: boolean }>({});
 
+  const [showPledgeModal, setShowPledgeModal] = useState(false);
+  const [showAIStudioModal, setShowAIStudioModal] = useState(false);
+  const [aiStudioTab, setAiStudioTab] = useState<'advice' | 'habit'>('advice');
+  const [aiStudioQuery, setAiStudioQuery] = useState('');
+  const [aiStudioResponse, setAiStudioResponse] = useState<string | null>(null);
+  const [loadingAiStudio, setLoadingAiStudio] = useState(false);
+  const [selectedHabitPillar, setSelectedHabitPillar] = useState('Respectful');
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
@@ -37,6 +54,13 @@ const StaffDashboard: React.FC = () => {
     // Set random quote on mount/login based on language
     const currentQuotes = MOTIVATIONAL_QUOTES[language] || MOTIVATIONAL_QUOTES.en;
     setPerfNote(currentQuotes[Math.floor(Math.random() * currentQuotes.length)]);
+    
+    // Check for daily pledge session
+    const hasPledged = sessionStorage.getItem('pledge_signed');
+    if (!hasPledged) {
+      setShowPledgeModal(true);
+    }
+
     return () => stopAudio();
   }, [user, language]); 
 
@@ -50,6 +74,42 @@ const StaffDashboard: React.FC = () => {
     // Auto-fetch general advice if we have approved KPIs
     const approved = data.filter(k => k.status === 'approved');
     if (approved.length > 0) fetchGeneralAnalysis(approved, staffEntries);
+  };
+
+  const confirmPledge = () => {
+    const pledgeText = `✅ Daily Strategy Pledge: I commit to Respectful, Integrity, Collaboration, Agile, and Deliver for ${new Date().toLocaleDateString()}.`;
+    db.addTodo(user!.id, pledgeText);
+    setTodos(db.getTodosForStaff(user!.id));
+    sessionStorage.setItem('pledge_signed', 'true');
+    setShowPledgeModal(false);
+  };
+
+  const handleAIStudioQuery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiStudioQuery.trim()) return;
+    setLoadingAiStudio(true);
+    setAiStudioResponse(null);
+    try {
+      const response = await getServiceCultureAdvice(user!.name, language, aiStudioQuery);
+      setAiStudioResponse(response);
+    } catch (e) {
+      setAiStudioResponse("Intelligence Sync Failed. Try again.");
+    } finally {
+      setLoadingAiStudio(false);
+    }
+  };
+
+  const handleHabitBuild = async () => {
+    setLoadingAiStudio(true);
+    setAiStudioResponse(null);
+    try {
+      const response = await getHabitBuildingPlan(user!.name, selectedHabitPillar, language);
+      setAiStudioResponse(response);
+    } catch (e) {
+      setAiStudioResponse("Habit Architect failed to generate plan. Try again.");
+    } finally {
+      setLoadingAiStudio(false);
+    }
   };
 
   const getGreeting = () => {
@@ -276,6 +336,7 @@ const StaffDashboard: React.FC = () => {
   const pendingSignatureKPIs = kpis.filter(k => k.status === 'pending_signature');
   const pendingApprovalKPIs = kpis.filter(k => k.status === 'pending_approval');
   const approvedKPIs = kpis.filter(k => k.status === 'approved');
+  const pendingEntries = entries.filter(e => e.status === 'pending');
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-20 px-2 md:px-0">
@@ -301,8 +362,27 @@ const StaffDashboard: React.FC = () => {
             </div>
           </div>
         </div>
-        <div className="flex-1 p-8 rounded-[32px] border border-white/5 bg-white/5 backdrop-blur-md flex flex-col justify-center text-center">
-          <p className="text-sm md:text-base font-bold leading-relaxed px-6 Amharic-text text-blue-100 italic">"{perfNote}"</p>
+        
+        <div className="flex-1 flex flex-col gap-4">
+           <div className="p-6 rounded-[32px] border border-white/5 bg-white/5 backdrop-blur-md flex-1 flex flex-col justify-center text-center">
+             <p className="text-sm md:text-base font-bold leading-relaxed px-6 Amharic-text text-blue-100 italic">"{perfNote}"</p>
+           </div>
+           
+           {/* Service Culture & AI Studio Buttons */}
+           <div className="flex gap-3">
+              <button 
+                onClick={() => { setAiStudioQuery("Give me a tip based on the Service Culture Pledge"); setAiStudioTab('advice'); setShowAIStudioModal(true); }}
+                className="flex-1 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 py-3 rounded-2xl font-black uppercase text-[10px] text-white shadow-lg transition-all border border-amber-500/30 flex items-center justify-center gap-2"
+              >
+                <span>🛡️</span> Service Pledge AI
+              </button>
+              <button 
+                onClick={() => { setAiStudioTab('habit'); setShowAIStudioModal(true); }}
+                className="flex-1 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 py-3 rounded-2xl font-black uppercase text-[10px] text-white shadow-lg transition-all border border-blue-500/30 flex items-center justify-center gap-2"
+              >
+                <span>🧠</span> Habit Architect
+              </button>
+           </div>
         </div>
       </section>
 
@@ -521,6 +601,126 @@ const StaffDashboard: React.FC = () => {
           </div>
         </form>
       </section>
+
+      {/* Pending Auth Section (Sent Items) */}
+      {pendingEntries.length > 0 && (
+        <section className="glass p-10 rounded-[48px] border border-white/5 bg-[#000d1a]/40 shadow-3xl mt-10 animate-fade-up">
+            <div className="flex items-center gap-3 mb-6">
+                <span className="text-2xl">⏳</span>
+                <h3 className="text-lg font-black uppercase tracking-tight text-amber-500">Pending Authorization Queue</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {pendingEntries.map(entry => (
+                    <div key={entry.id} className="bg-black/40 p-5 rounded-3xl border border-amber-500/20 relative overflow-hidden">
+                        <div className="flex justify-between items-center mb-3">
+                            <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest">{entry.date}</span>
+                            <span className="px-3 py-1 bg-amber-600/20 text-amber-500 rounded-full text-[8px] font-black uppercase tracking-widest animate-pulse">Sent to Manager</span>
+                        </div>
+                        <div className="space-y-2">
+                            {Object.entries(entry.metrics).map(([k,v]) => (
+                                <div key={k} className="flex justify-between items-center">
+                                    <span className="text-[10px] text-gray-400 font-bold truncate max-w-[150px]">{k}</span>
+                                    <span className="text-xs font-mono text-white">{v.toLocaleString()}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </section>
+      )}
+
+      {/* Daily Strategic Pledge Modal */}
+      {showPledgeModal && (
+        <div className="fixed inset-0 z-[250] flex items-center justify-center p-6 bg-black/95 backdrop-blur-md animate-in fade-in">
+          <div className="glass w-full max-w-md p-10 rounded-[48px] border border-indigo-500/30 bg-[#001226] text-center shadow-3xl">
+            <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto mb-6 flex items-center justify-center text-3xl shadow-lg border border-indigo-400/30">📜</div>
+            <h4 className="text-2xl font-black text-white uppercase tracking-tighter mb-4">Daily Strategic Pledge</h4>
+            <p className="text-gray-400 text-xs mb-8 leading-relaxed font-medium">
+              By entering the portal, you commit to the DIZ Core Values: <br/>
+              <span className="text-indigo-400 font-bold">Respectful • Integrity • Collaboration • Agile • Deliver</span>
+            </p>
+            <button onClick={confirmPledge} className="w-full bg-indigo-600 hover:bg-indigo-500 py-5 rounded-3xl font-black uppercase text-xs shadow-xl transition-all active:scale-95">I Commit & Enter</button>
+          </div>
+        </div>
+      )}
+
+      {/* AI Studio Intelligence Sync Modal */}
+      {showAIStudioModal && (
+        <div className="fixed inset-0 z-[250] flex items-center justify-center p-6 bg-black/95 backdrop-blur-md animate-in fade-in">
+          <div className="glass w-full max-w-2xl p-8 md:p-12 rounded-[48px] border border-blue-500/30 bg-[#001226] shadow-3xl flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-start mb-4">
+               <h4 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-3">
+                 <span className="text-3xl">🧠</span> AI Service Hub
+               </h4>
+               <button onClick={() => { setShowAIStudioModal(false); setAiStudioResponse(null); }} className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400">✕</button>
+            </div>
+
+            <div className="flex gap-2 mb-6 border-b border-white/5 pb-4">
+               <button onClick={() => { setAiStudioTab('advice'); setAiStudioResponse(null); }} className={`flex-1 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${aiStudioTab === 'advice' ? 'bg-amber-600 text-white shadow-lg' : 'bg-white/5 text-gray-500'}`}>
+                 Pledge Advisor
+               </button>
+               <button onClick={() => { setAiStudioTab('habit'); setAiStudioResponse(null); }} className={`flex-1 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${aiStudioTab === 'habit' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white/5 text-gray-500'}`}>
+                 Habit Architect
+               </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto custom-scrollbar mb-6 bg-black/30 rounded-3xl p-6 border border-white/5">
+               {aiStudioResponse ? (
+                 <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-line Amharic-text animate-in fade-in">
+                   {renderMarkdownText(aiStudioResponse)}
+                 </div>
+               ) : (
+                 <div className="text-center py-10 opacity-50 flex flex-col items-center justify-center">
+                   <div className="text-4xl mb-4 grayscale opacity-30">{aiStudioTab === 'habit' ? '🧗' : '💬'}</div>
+                   <p className="text-xs font-black uppercase tracking-widest text-gray-500">
+                     {aiStudioTab === 'habit' ? 'Select a pillar to generate a 5-day plan' : 'Ask for strategic pledge advice'}
+                   </p>
+                 </div>
+               )}
+            </div>
+
+            {aiStudioTab === 'advice' ? (
+              <form onSubmit={handleAIStudioQuery} className="flex gap-3 mb-6">
+                 <input 
+                   type="text" 
+                   className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-6 text-sm text-white focus:border-amber-500 outline-none placeholder:text-gray-600"
+                   placeholder="E.g., How can I be more Agile today?"
+                   value={aiStudioQuery}
+                   onChange={e => setAiStudioQuery(e.target.value)}
+                 />
+                 <button disabled={loadingAiStudio} className="bg-amber-600 hover:bg-amber-500 px-6 rounded-2xl font-black text-xl transition-all shadow-lg disabled:opacity-50">
+                   {loadingAiStudio ? '...' : '➤'}
+                 </button>
+              </form>
+            ) : (
+              <div className="space-y-4 mb-6">
+                 <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                    {['Respectful', 'Integrity', 'Collaboration', 'Agile', 'Deliver'].map(p => (
+                       <button 
+                         key={p} 
+                         onClick={() => setSelectedHabitPillar(p)}
+                         className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border ${selectedHabitPillar === p ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-white'}`}
+                       >
+                         {p}
+                       </button>
+                    ))}
+                 </div>
+                 <button onClick={handleHabitBuild} disabled={loadingAiStudio} className="w-full bg-indigo-600 hover:bg-indigo-500 py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg transition-all disabled:opacity-50">
+                    {loadingAiStudio ? 'Generating Micro-Habits...' : `Create 5-Day ${selectedHabitPillar} Plan`}
+                 </button>
+              </div>
+            )}
+
+            <div className="text-center pt-6 border-t border-white/10">
+               <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-3">Connect External Intelligence</p>
+               <a href="https://chatgpt.com/" target="_blank" rel="noreferrer" className="text-[10px] text-blue-400 font-black uppercase tracking-widest hover:underline hover:text-blue-300">
+                 Open External ChatGPT Coach ↗
+               </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       {aiFeedback && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/95 backdrop-blur-md animate-in fade-in">

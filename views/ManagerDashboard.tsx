@@ -1,21 +1,19 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  LineChart, Line, Legend, BarChart, Bar, AreaChart, Area
+  AreaChart, Area
 } from 'recharts';
 import { db } from '../services/mockDb';
 import { 
   getAIPerformanceAnalysis, 
   getStaffSpecificAdvice, 
-  getGeneralStaffAdvice,
-  getKPICoachingTips,
   generateAdviceAudio,
   decode,
-  decodeAudioData
+  decodeAudioData,
+  getServiceCultureAdvice,
+  getHabitBuildingPlan
 } from '../services/geminiService';
-import { DailyEntry, KPIConfig, UserProfile, UserRole, TodoItem } from '../types';
-import { APP_CONFIG, MOTIVATIONAL_QUOTES_AMHARIC } from '../constants';
+import { DailyEntry, KPIConfig, UserProfile, UserRole } from '../types';
 import { useAuth } from '../App';
 import ProfilePhotoModal from '../components/ProfilePhotoModal';
 
@@ -32,61 +30,92 @@ const ManagerDashboard: React.FC = () => {
   const [loadingStaffAdvice, setLoadingStaffAdvice] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showAdminTools, setShowAdminTools] = useState(false);
-  const [showMyNotes, setShowMyNotes] = useState(false);
-  const [showRecoveryHub, setShowRecoveryHub] = useState(false);
-  const [showRightsGovernance, setShowRightsGovernance] = useState(false);
-  const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [backupLogs, setBackupLogs] = useState<{ date: string; status: string }[]>([]);
+
+  // AI Studio & Pledge State
+  const [showPledgeModal, setShowPledgeModal] = useState(false);
+  const [showAIStudioModal, setShowAIStudioModal] = useState(false);
+  const [aiStudioTab, setAiStudioTab] = useState<'advice' | 'habit'>('advice');
+  const [aiStudioQuery, setAiStudioQuery] = useState('');
+  const [aiStudioResponse, setAiStudioResponse] = useState<string | null>(null);
+  const [loadingAiStudio, setLoadingAiStudio] = useState(false);
+  const [selectedHabitPillar, setSelectedHabitPillar] = useState('Respectful');
 
   const [playingAIReportAudio, setPlayingAIReportAudio] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
+  const refreshData = () => {
+    const all = db.getAllUsers();
+    setAllUsers(all);
+    
+    let visibleStaff: UserProfile[] = [];
+    if (user?.role === UserRole.MANAGER) {
+      // Manager sees everyone (Staff + CSM)
+      visibleStaff = all.filter(u => u.role === UserRole.STAFF || u.role === UserRole.CSM);
+    } else if (user?.role === UserRole.CSM) {
+      // CSM sees all Staff, excluding Manager
+      visibleStaff = all.filter(u => u.role === UserRole.STAFF);
+    }
+    setStaff(visibleStaff);
+    
+    setEntries(db.getAllEntries());
+    setKpis(db.getAllKPIs());
+    setBackupLogs(db.getBackupLogs());
+  };
+
   useEffect(() => { 
     refreshData(); 
+    
+    // Daily Pledge Check
+    const hasPledged = sessionStorage.getItem('pledge_signed');
+    if (!hasPledged) {
+      setShowPledgeModal(true);
+    }
+
     const checkBackupTime = setInterval(() => {
       const now = new Date();
       // Check for 10:00 PM (22:00)
       if (now.getHours() === 22 && now.getMinutes() === 0 && now.getSeconds() < 10) {
-        performDailyBackup();
+        db.logBackup('Auto-Backup Success');
+        setBackupLogs(db.getBackupLogs());
       }
     }, 10000);
-    return () => {
-        clearInterval(checkBackupTime);
-        stopAudio();
-    }
+
+    return () => clearInterval(checkBackupTime);
   }, [user]);
 
-  const refreshData = () => {
-    const allE = db.getAllEntries();
-    const allK = db.getAllKPIs();
-    const allU = db.getAllUsers();
-    setEntries(allE);
-    setKpis(allK);
-    setAllUsers(allU);
-    setBackupLogs(db.getBackupLogs());
-    
-    const visibleStaff = db.getVisibleStaffStaffOnly(user!);
-    setStaff(visibleStaff);
+  const handleGenerateReport = async () => {
+      setLoadingAI(true);
+      try {
+          const report = await getAIPerformanceAnalysis(entries, kpis, user?.role === UserRole.CSM, language);
+          setAiReport(report);
+      } catch (error) {
+          alert('AI Analysis Failed');
+      } finally {
+          setLoadingAI(false);
+      }
   };
 
   const stopAudio = () => {
-      if (audioSourceRef.current) {
-          try { audioSourceRef.current.stop(); } catch(e) {}
-          audioSourceRef.current = null;
-      }
-      setPlayingAIReportAudio(false);
+    if (audioSourceRef.current) {
+        try { audioSourceRef.current.stop(); } catch(e) {}
+        audioSourceRef.current = null;
+    }
+    setPlayingAIReportAudio(false);
   };
 
   const playAIReport = async () => {
-      if (playingAIReportAudio) { stopAudio(); return; }
+      if (playingAIReportAudio) {
+          stopAudio();
+          return;
+      }
       if (!aiReport) return;
-      stopAudio();
+      
       setPlayingAIReportAudio(true);
       try {
           const base64Audio = await generateAdviceAudio(aiReport);
-          if (!base64Audio) throw new Error();
+          if (!base64Audio) throw new Error("No audio data");
           
           if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
           const ctx = audioContextRef.current;
@@ -97,454 +126,514 @@ const ManagerDashboard: React.FC = () => {
           source.onended = () => setPlayingAIReportAudio(false);
           audioSourceRef.current = source;
           source.start();
-      } catch (err) {
+      } catch (e) {
           setPlayingAIReportAudio(false);
+          alert("Audio playback failed");
       }
   };
 
-  const performDailyBackup = () => {
-    const data = db.exportDatabase();
-    // Simulate cloud push to habeshaw00@gmail.com
-    console.log("Transmitting daily snapshot to habeshaw00@gmail.com...");
-    db.logBackup("Success: habeshaw00@gmail.com (Google Drive Sync)");
-    setBackupLogs(db.getBackupLogs());
+  const handleSelectStaff = async (s: UserProfile) => {
+      setSelectedStaff(s);
+      setStaffAdvice(null);
+      setLoadingStaffAdvice(true);
+      try {
+          const sEntries = entries.filter(e => e.staffId === s.id);
+          const sKpis = kpis.filter(k => k.assignedToEmail === s.email);
+          const advice = await getStaffSpecificAdvice(s.name, sEntries, sKpis, language);
+          setStaffAdvice(advice);
+      } catch (e) {
+          setStaffAdvice("Could not generate advice.");
+      } finally {
+          setLoadingStaffAdvice(false);
+      }
   };
 
-  const handleExportDB = () => {
-    const data = db.exportDatabase();
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `DIZ_Snapshot_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    db.logBackup("Manual Export Downloaded");
-    setBackupLogs(db.getBackupLogs());
+  const confirmPledge = () => {
+    sessionStorage.setItem('pledge_signed', 'true');
+    setShowPledgeModal(false);
   };
 
-  const handleImportDB = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const json = event.target?.result as string;
-        if (db.importDatabase(json)) {
-          alert("Snapshot Recall Successful.");
-          refreshData();
-        }
-      };
-      reader.readAsText(file);
+  const handleAIStudioQuery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiStudioQuery.trim()) return;
+    setLoadingAiStudio(true);
+    setAiStudioResponse(null);
+    try {
+      const response = await getServiceCultureAdvice(user!.name, language, aiStudioQuery);
+      setAiStudioResponse(response);
+    } catch (e) {
+      setAiStudioResponse("Intelligence Sync Failed. Try again.");
+    } finally {
+      setLoadingAiStudio(false);
     }
   };
 
-  const togglePermission = (userId: string, perm: string) => {
-    db.togglePermission(userId, perm);
-    refreshData();
+  const handleHabitBuild = async () => {
+    setLoadingAiStudio(true);
+    setAiStudioResponse(null);
+    try {
+      const response = await getHabitBuildingPlan(user!.name, selectedHabitPillar, language);
+      setAiStudioResponse(response);
+    } catch (e) {
+      setAiStudioResponse("Habit Architect failed to generate plan. Try again.");
+    } finally {
+      setLoadingAiStudio(false);
+    }
   };
 
-  const assignSupervisor = (userId: string, supervisorId: string) => {
-    db.updateSupervisor(userId, supervisorId === 'none' ? null : supervisorId);
-    refreshData();
-  };
-
-  const downloadStaffDetailCSV = (s: UserProfile) => {
-    const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-    const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
+  const handleExportManagerCSV = () => {
     const now = new Date();
     
-    const rows = [
-      ["STAFF PERFORMANCE MATRIX - NODE: " + s.name.toUpperCase()],
-      ["ID: " + s.username.toUpperCase(), "BRANCH: " + (s.branch || 'DIZ branch')],
-      ["EXPORTED ON: " + now.toLocaleDateString() + " " + now.toLocaleTimeString()],
-      [],
-      ["KPI NAME", "UNIT", "NET ACTUAL", "DAILY GOAL", "DAILY %", "WEEKLY GOAL", "WEEKLY %", "MONTHLY GOAL", "MONTHLY %", "YEARLY GOAL", "YEARLY %"]
-    ];
+    // 1. Aggregate Data Calculation
+    // Get unique KPI names that are active (approved) in the system
+    const uniqueKpiNames = Array.from(new Set(kpis.filter(k => k.status === 'approved').map(k => k.name)));
+    
+    const aggregateRows = uniqueKpiNames.map((kpiName: string) => {
+        // Find all approved KPIs with this name assigned to currently visible staff
+        const relevantKpis = kpis.filter(k => k.name === kpiName && k.status === 'approved' && staff.some(s => s.email === k.assignedToEmail));
+        
+        if (relevantKpis.length === 0) return null;
 
-    sKPIs.forEach(k => {
-      const net = sEntries.reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
-      const daily = k.target / 365;
-      const weekly = k.target / 52;
-      const monthly = k.target / 12;
-      const yearly = k.target;
-      const calcPerc = (actual: number, goal: number) => goal > 0 ? ((actual / goal) * 100).toFixed(1) + "%" : "0%";
-      rows.push([
-        k.name, 
-        k.unit, 
-        net.toString(),
-        daily.toFixed(2), calcPerc(net, daily),
-        weekly.toFixed(2), calcPerc(net, weekly),
-        monthly.toFixed(2), calcPerc(net, monthly),
-        yearly.toFixed(2), calcPerc(net, yearly)
-      ]);
-    });
+        const unit = relevantKpis[0].unit;
+        const totalTarget = relevantKpis.reduce((sum, k) => sum + k.target, 0);
+        
+        const staffIds = staff.map(s => s.id);
+        const totalActual = entries
+            .filter(e => e.status === 'authorized' && staffIds.includes(e.staffId))
+            .reduce((sum, e) => sum + (e.metrics[kpiName] || 0) - (e.metrics[`${kpiName} Out`] || 0), 0);
+            
+        const perc = totalTarget > 0 ? ((totalActual / totalTarget) * 100).toFixed(1) + '%' : '0%';
+        
+        return [kpiName, unit, totalTarget.toString(), totalActual.toString(), perc];
+    }).filter(row => row !== null);
 
-    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Detailed_Performance_${s.username}_${now.getTime()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const downloadGlobalAggregateCSV = () => {
-    const now = new Date();
-    const templates = APP_CONFIG.STANDARD_KPI_TEMPLATES.filter(t => !t.isOutflow);
-    const rows = [
-      ["GLOBAL PERFORMANCE SYNC MATRIX"],
-      ["EXPORTED ON: " + now.toLocaleDateString() + " " + now.toLocaleTimeString()],
-      [],
-      ["STAFF NAME", "KPI NAME", "UNIT", "NET ACTUAL", "WEEKLY %", "MONTHLY %", "YEARLY %"]
-    ];
-    let grandTotalNet = 0;
+    // 2. Individual Staff Data
+    const staffRows: (string | number)[][] = [];
     staff.forEach(s => {
-      const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
-      const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-      templates.forEach(t => {
-        const kpiConfig = sKPIs.find(k => k.name === t.name);
-        if (kpiConfig) {
-          const net = sEntries.reduce((sum, e) => sum + (e.metrics[t.name] || 0) - (e.metrics[`${t.name} Out`] || 0), 0);
-          const weeklyPerc = (kpiConfig.target / 52) > 0 ? ((net / (kpiConfig.target / 52)) * 100).toFixed(1) + "%" : "0%";
-          const monthlyPerc = (kpiConfig.target / 12) > 0 ? ((net / (kpiConfig.target / 12)) * 100).toFixed(1) + "%" : "0%";
-          const yearlyPerc = kpiConfig.target > 0 ? ((net / kpiConfig.target) * 100).toFixed(1) + "%" : "0%";
-          rows.push([s.name, t.name, t.unit, net.toString(), weeklyPerc, monthlyPerc, yearlyPerc]);
-          grandTotalNet += net;
+        const staffKpis = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
+        const staffEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
+
+        if (staffKpis.length === 0) {
+             staffRows.push([s.name, s.role, s.branch || '', "No Active KPIs", "-", "0", "0", "-"]);
+        } else {
+            staffKpis.forEach(k => {
+                const actual = staffEntries.reduce((sum, e) => sum + (e.metrics[k.name] || 0) - (e.metrics[`${k.name} Out`] || 0), 0);
+                const perc = k.target > 0 ? ((actual / k.target) * 100).toFixed(1) + '%' : '0%';
+                staffRows.push([s.name, s.role, s.branch || '', k.name, k.unit, k.target, actual, perc]);
+            });
         }
-      });
-      rows.push([]);
     });
-    rows.push(["BRANCH TOTAL OUTPUT", "", "", grandTotalNet.toString(), "", "", ""]);
-    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
+
+    // 3. Construct CSV
+    const csvContent = [
+        ["DUKEM INDUSTRY ZONE - PERFORMANCE REPORT"],
+        ["Generated By:", user?.name, "Date:", now.toLocaleString()],
+        [],
+        ["--- AGGREGATE DOMAIN PERFORMANCE ---"],
+        ["KPI Name", "Unit", "Total Target", "Total Actual", "Achievement %"],
+        ...(aggregateRows as (string|number)[][]),
+        [],
+        ["--- DETAILED STAFF PERFORMANCE ---"],
+        ["Staff Name", "Role", "Branch", "KPI Name", "Unit", "Target", "Actual", "Achievement %"],
+        ...staffRows
+    ].map(e => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Global_Aggregate_Matrix_${now.getTime()}.csv`);
+    link.setAttribute("download", `Manager_Report_${now.getTime()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const selectStaffNode = async (s: UserProfile) => {
-    setSelectedStaff(s);
-    setStaffAdvice(null);
-    setLoadingStaffAdvice(true);
-    try {
-      const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
-      const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-      const advice = await getStaffSpecificAdvice(s.name, sEntries, sKPIs, language);
-      setStaffAdvice(advice);
-    } catch (err) {
-      setStaffAdvice("Tactical analysis error.");
-    } finally {
-      setLoadingStaffAdvice(false);
-    }
+  const renderMarkdownText = (text: string) => {
+     const parts = text.split(/(\[.*?\]\(.*?\))/g);
+     return parts.map((part, i) => {
+        const match = part.match(/\[(.*?)\]\((.*?)\)/);
+        if (match) return <a key={i} href={match[2]} target="_blank" rel="noreferrer" className="text-blue-400 font-black hover:underline mx-1">[{match[1]}]</a>;
+        return part;
+     });
   };
 
-  const availableRights = [
-    { id: 'can_view_notes', label: '📒 Strategic Log rights' },
-    { id: 'can_view_vault', label: '💡 Innovation Folder rights' },
-    { id: 'can_export_csv', label: '📊 Matrix Export' },
-    { id: 'can_sync_ai', label: '🤖 AI Intelligence access' },
-  ];
+  // Helper calculation functions (duplicated from StaffDashboard for consistency)
+  const calculateTimeFrameMetrics = (kpiName: string, staffEntries: DailyEntry[]) => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    
+    // Get start of current week (Monday)
+    const d = new Date(now);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
+    const monday = new Date(d.setDate(diff));
+    monday.setHours(0,0,0,0);
 
-  const csmManagers = allUsers.filter(u => u.role === UserRole.CSM || u.role === UserRole.MANAGER);
+    let yearly = 0;
+    let monthly = 0;
+    let weekly = 0;
+
+    staffEntries.filter(e => e.status === 'authorized').forEach(e => {
+        const entryDate = new Date(e.date);
+        const val = (e.metrics[kpiName] || 0) - (e.metrics[`${kpiName} Out`] || 0);
+
+        if (entryDate.getFullYear() === currentYear) {
+            yearly += val;
+            if (entryDate.getMonth() === currentMonth) {
+                monthly += val;
+            }
+            if (entryDate >= monday) {
+                weekly += val;
+            }
+        }
+    });
+
+    return { yearly, monthly, weekly };
+  };
+
+  const renderProgressBar = (actual: number, target: number) => {
+    const perc = target > 0 ? Math.min(Math.round((actual / target) * 100), 100) : 0;
+    const color = perc >= 100 ? 'bg-green-500' : perc >= 50 ? 'bg-yellow-500' : 'bg-red-500';
+    return (
+      <div className="h-1 bg-white/10 rounded-full overflow-hidden w-full mt-1">
+        <div className={`h-full transition-all duration-1000 ${color}`} style={{ width: `${perc}%` }}></div>
+      </div>
+    );
+  };
+
+  // Calculate aggregate metrics for charts
+  const getChartData = () => {
+      // Aggregate entries by date
+      const dataMap: {[date: string]: {date: string, value: number}} = {};
+      const targetStaffIds = staff.map(s => s.id);
+      
+      entries.filter(e => targetStaffIds.includes(e.staffId) && e.status === 'authorized').forEach(e => {
+          if (!dataMap[e.date]) dataMap[e.date] = { date: e.date, value: 0 };
+          const val = (Object.values(e.metrics) as number[]).reduce((a, b) => a + b, 0);
+          dataMap[e.date].value += val;
+      });
+      
+      return Object.values(dataMap).sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(-14); // Last 14 entries
+  };
 
   return (
-    <div className="space-y-8 pb-20 max-w-7xl mx-auto px-4 md:px-0">
-      {showUploadModal && <ProfilePhotoModal userId={user!.id} onClose={() => setShowUploadModal(false)} onUpdate={(url) => login({...user!, profilePic: url})} />}
+    <div className="space-y-8 max-w-7xl mx-auto pb-20 px-2 md:px-0">
+        {showUploadModal && <ProfilePhotoModal userId={user!.id} onClose={() => setShowUploadModal(false)} onUpdate={(dataUrl) => login({...user!, profilePic: dataUrl})} />}
 
-      <section className="flex flex-col lg:flex-row justify-between items-center gap-6 p-8 glass rounded-[40px] border border-blue-500/10 bg-[#000d1a]/40 shadow-xl relative overflow-hidden group">
-        <div className="flex flex-col md:flex-row items-center gap-8 text-center md:text-left">
-          <div className="relative shrink-0">
-            <div className="w-20 h-20 rounded-[28px] overflow-hidden border-2 border-blue-500/20 bg-[#001f3f] flex items-center justify-center shadow-2xl">
-              {user?.profilePic ? <img src={user.profilePic} className="w-full h-full object-cover" /> : <span className="text-3xl font-black text-blue-400">{user?.name.charAt(0)}</span>}
-            </div>
-            <button onClick={() => setShowUploadModal(true)} className="absolute -bottom-1 -right-1 bg-blue-600 text-white w-8 h-8 rounded-xl flex items-center justify-center shadow-lg transition-all text-xs border border-[#001f3f]">📷</button>
-          </div>
-          <div>
-            <p className="text-blue-400 font-black text-[10px] uppercase tracking-[0.3em] mb-2 Amharic-text">እንደምን ዋሉ፣ {user?.name.split(' ')[0]}! 😊</p>
-            <h2 className="text-3xl font-black text-white uppercase tracking-tighter leading-none mb-2">{user?.name}</h2>
-            <div className="flex flex-wrap gap-2 justify-center md:justify-start">
-              <span className="bg-white/5 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase text-gray-500 tracking-widest">{user?.branch}</span>
-              {user?.role === UserRole.MANAGER && (
-                <div className="flex flex-wrap gap-2">
-                   <button onClick={() => setShowRecoveryHub(!showRecoveryHub)} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     {showRecoveryHub ? 'Close Recall' : '🛡️ Continuity Hub'}
-                   </button>
-                   <button onClick={() => setShowRightsGovernance(!showRightsGovernance)} className="bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all">
-                     {showRightsGovernance ? 'Close Rights' : '🔐 Rights Governance'}
-                   </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        <button onClick={async () => { setLoadingAI(true); const r = await getAIPerformanceAnalysis(entries, kpis, user?.role === UserRole.CSM, language); setAiReport(r); setLoadingAI(false); }} disabled={loadingAI} className="bg-indigo-600 hover:bg-indigo-500 px-10 py-5 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-[0.98]">
-          {loadingAI ? '🤖 SYNCING...' : '✨ Intelligence Sync'}
-        </button>
-      </section>
-
-      {/* AI Intelligence Relay */}
-      {aiReport && (
-        <section className="glass p-10 rounded-[56px] border border-indigo-500/30 bg-indigo-600/5 animate-fade-up shadow-3xl relative">
-          <div className="flex justify-between items-start mb-8">
-            <h3 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-4">
-              🤖 Strategic Intelligence Relay
-            </h3>
-            <div className="flex gap-3">
-              <button onClick={playAIReport} className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${playingAIReportAudio ? 'bg-red-600 animate-pulse text-white' : 'bg-indigo-600/10 text-indigo-400 hover:bg-indigo-600/20'}`} title="Listen to Report">
-                {playingAIReportAudio ? '🔇' : '🔊'}
-              </button>
-              <button onClick={() => setAiReport(null)} className="text-[10px] font-black uppercase text-gray-500 hover:text-white transition-colors">መዝጊያ ✕</button>
-            </div>
-          </div>
-          <p className="text-gray-200 text-xs md:text-sm italic leading-relaxed whitespace-pre-line border-l border-indigo-500/50 pl-6 Amharic-text">{aiReport}</p>
-        </section>
-      )}
-
-      {/* Continuity & Recovery Hub */}
-      {showRecoveryHub && user?.role === UserRole.MANAGER && (
-        <section className="glass p-10 rounded-[48px] border border-blue-500/20 bg-[#001f3f]/40 animate-fade-up shadow-3xl">
-           <h3 className="text-xl font-black text-white uppercase mb-8 flex items-center gap-4">🛡️ System Continuity & Cloud Sync</h3>
-           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-10">
-              <div className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-4 text-center">
-                 <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Daily Cloud Sync</h4>
-                 <p className="text-[9px] text-gray-400 uppercase font-bold">habeshaw00@gmail.com</p>
-                 <div className="flex items-center justify-center gap-2">
-                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                   <span className="text-[8px] font-black text-green-400 uppercase">Auto-Backups: 10:00 PM Active</span>
-                 </div>
-                 <button onClick={performDailyBackup} className="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-black text-[9px] uppercase transition-all shadow-lg mt-4">Manual Cloud Push Now</button>
-              </div>
-              <div className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-4 text-center">
-                 <h4 className="text-[10px] font-black text-red-400 uppercase tracking-widest">Snapshot Export</h4>
-                 <p className="text-[9px] text-gray-400 uppercase font-bold">Local .JSON Mirror</p>
-                 <button onClick={handleExportDB} className="w-full bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white py-4 rounded-2xl font-black text-[9px] uppercase border border-red-500/20 transition-all mt-4">Download Mirror</button>
-              </div>
-              <div className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-4 text-center">
-                 <h4 className="text-[10px] font-black text-green-400 uppercase tracking-widest">Data Recall</h4>
-                 <p className="text-[9px] text-gray-400 uppercase font-bold">Import Historical State</p>
-                 <label className="block w-full bg-green-600/20 hover:bg-green-600 text-green-400 hover:text-white py-4 rounded-2xl font-black text-[9px] uppercase border border-green-500/20 text-center cursor-pointer transition-all mt-4">
-                    Deploy Recall
-                    <input type="file" accept=".json" onChange={handleImportDB} className="hidden" />
-                 </label>
-              </div>
-           </div>
-
-           <div className="bg-black/60 p-6 rounded-[32px] border border-white/5">
-              <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4">Continuity Log:</p>
-              <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
-                 {backupLogs.slice(-10).reverse().map((log, i) => (
-                    <div key={i} className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
-                       <span className="text-[8px] font-mono text-gray-400">{new Date(log.date).toLocaleString()}</span>
-                       <span className="text-[8px] font-black uppercase text-blue-400">{log.status}</span>
+        {/* Header Section */}
+        <section className="flex flex-col lg:flex-row gap-6">
+            <div className="flex-1 flex items-center gap-6 p-6 glass rounded-[32px] border border-purple-500/20 bg-[#000d1a]/40 shadow-xl overflow-hidden relative">
+                <div className="relative shrink-0">
+                    <div className="w-20 h-20 rounded-[28px] overflow-hidden border-2 border-purple-500/20 bg-[#001f3f] flex items-center justify-center shadow-2xl">
+                        {user?.profilePic ? <img src={user.profilePic} className="w-full h-full object-cover" /> : <div className="text-3xl font-black text-purple-400">{user?.name.charAt(0)}</div>}
                     </div>
-                 ))}
-                 {backupLogs.length === 0 && <p className="text-center py-4 text-[8px] font-black uppercase text-gray-700 italic">No logs recorded.</p>}
-              </div>
-           </div>
-        </section>
-      )}
-      
-      {/* Manager: Rights & Domain Governance Hub */}
-      {showRightsGovernance && user?.role === UserRole.MANAGER && (
-        <section className="glass p-10 rounded-[48px] border border-indigo-500/20 bg-indigo-600/5 animate-fade-up shadow-3xl">
-           <h3 className="text-xl font-black text-white uppercase mb-8 flex items-center gap-4">🔐 Strategic Rights & Domain Governance</h3>
-           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {allUsers.filter(u => u.id !== user.id).map(u => (
-                <div key={u.id} className="p-8 bg-black/40 rounded-[40px] border border-white/5 space-y-8 shadow-xl relative overflow-hidden group">
-                  <div className="flex items-center justify-between border-b border-white/5 pb-4">
-                     <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-2xl bg-blue-600/20 flex items-center justify-center font-black text-blue-400 text-lg border border-blue-500/10">{u.name.charAt(0)}</div>
-                        <div>
-                           <p className="text-sm font-black text-white uppercase truncate">{u.name}</p>
-                           <p className="text-[8px] text-gray-500 font-bold uppercase tracking-widest">Node ID: {u.username}</p>
-                        </div>
-                     </div>
-                     <span className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest border ${u.role === UserRole.CSM ? 'bg-purple-600/20 text-purple-400 border-purple-500/30' : 'bg-gray-600/20 text-gray-400 border-gray-500/20'}`}>{u.role}</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <div className="space-y-3">
-                       <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em]">Interface Buttons & Access</p>
-                       <div className="flex flex-col gap-2">
-                          {availableRights.map(right => (
-                             <button 
-                               key={right.id} 
-                               onClick={() => togglePermission(u.id, right.id)}
-                               className={`w-full text-left px-5 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all border ${u.permissions?.includes(right.id) ? 'bg-indigo-600/20 text-white border-indigo-500' : 'bg-white/5 text-gray-500 border-white/5 hover:text-white hover:bg-white/10'}`}
-                             >
-                               {u.permissions?.includes(right.id) ? '✅ ACTIVE' : '❌ DISABLED'} // {right.label}
-                             </button>
-                          ))}
-                       </div>
-                    </div>
-                    
-                    <div className="space-y-3">
-                       <p className="text-[9px] font-black text-gray-600 uppercase tracking-[0.2em]">Domain Oversight (CSM Control)</p>
-                       <div className="p-5 bg-white/5 rounded-2xl border border-white/5">
-                          <label className="text-[8px] font-black text-blue-400 uppercase tracking-widest block mb-2">Assign Oversight CSM:</label>
-                          <select 
-                            className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-[10px] text-white font-bold outline-none"
-                            value={u.supervisorId || 'none'}
-                            onChange={(e) => assignSupervisor(u.id, e.target.value)}
-                          >
-                             <option value="none">UNASSIGNED (Wonde Only)</option>
-                             {csmManagers.filter(c => c.id !== u.id).map(csm => <option key={csm.id} value={csm.id}>{csm.name} ({csm.role})</option>)}
-                          </select>
-                       </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-           </div>
-        </section>
-      )}
-
-      {/* Node Directory Section */}
-      <section className="glass p-10 rounded-[48px] border border-white/5 bg-[#000d1a]/40 shadow-2xl">
-        <div className="flex flex-col md:flex-row justify-between items-center mb-10 gap-6">
-           <div>
-              <h3 className="text-xs font-black uppercase tracking-[0.4em] text-blue-400">Node Directory & Tactical Oversight</h3>
-              <p className="text-gray-500 text-[9px] font-black uppercase mt-1 tracking-widest">Select a node to view chronological logs, achievement trends, and matrix output</p>
-        </div>
-           <div className="flex gap-4 w-full md:w-auto">
-             <input type="text" placeholder="Search Node ID..." className="bg-[#001f3f] border border-white/10 rounded-2xl py-3 px-8 text-sm outline-none focus:border-blue-500 font-bold text-white flex-1 md:w-80 shadow-inner" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-             <button onClick={downloadGlobalAggregateCSV} className="bg-emerald-600 hover:bg-emerald-500 text-white p-4 rounded-2xl shadow-xl transition-all flex items-center gap-2" title="Export Aggregate Matrix">
-               📊 <span className="text-[10px] font-black uppercase">Excel Aggregate</span>
-             </button>
-           </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {staff.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase())).map(s => {
-             const sEntries = entries.filter(e => e.staffId === s.id && e.status === 'authorized');
-             const sKPIs = kpis.filter(k => k.assignedToEmail === s.email && k.status === 'approved');
-             // Fix: cast metric value to number to avoid "unknown" operator error
-             const totalNet = sEntries.reduce((sum, e) => sum + Object.entries(e.metrics).reduce((acc, [k, v]) => acc + (k.includes("Out") ? -(v as number) : (v as number)), 0), 0);
-             const totalTarget = sKPIs.reduce((sum, k) => sum + k.target, 0);
-             const annualPerc = totalTarget > 0 ? Math.round((totalNet / totalTarget) * 100) : 0;
-             
-             return (
-              <div key={s.id} onClick={() => selectStaffNode(s)} className="p-6 bg-white/5 rounded-[32px] border border-white/5 hover:border-blue-500/30 transition-all cursor-pointer group flex flex-col shadow-md">
-                <div className="flex items-center gap-4 mb-6">
-                  <div className="w-12 h-12 rounded-xl bg-blue-600/10 flex items-center justify-center text-blue-400 font-black overflow-hidden border border-blue-500/20 shrink-0">
-                    {s.profilePic ? <img src={s.profilePic} className="w-full h-full object-cover" /> : s.name.charAt(0)}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-black text-white truncate uppercase">{s.name}</p>
-                    <p className="text-[8px] text-gray-500 uppercase font-black tracking-widest">{s.username} • {s.branch}</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3 mb-6">
-                  <div className="flex justify-between items-center text-[7px] font-black uppercase">
-                    <span className="text-gray-500">ANNUAL TRANSMISSION EFFICIENCY</span>
-                    <span className={annualPerc >= 100 ? 'text-green-400' : 'text-blue-300'}>{annualPerc}%</span>
-                  </div>
-                  <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                    <div className={`h-full transition-all duration-1000 ${annualPerc >= 100 ? 'bg-green-500' : 'bg-blue-600'}`} style={{ width: `${Math.min(annualPerc, 100)}%` }}></div>
-                  </div>
-                </div>
-                
-                <div className="flex gap-2">
-                   <button className="flex-1 bg-blue-600/10 group-hover:bg-blue-600 py-3 rounded-xl font-black uppercase text-[8px] tracking-widest transition-all">Inspect Node Strategy</button>
-                   <button onClick={(e) => { e.stopPropagation(); downloadStaffDetailCSV(s); }} className="px-4 bg-emerald-600/10 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded-xl transition-all text-xs" title="Download Excel Matrix">📂</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Staff Detail Overlay */}
-      {selectedStaff && (
-        <div className="fixed inset-0 bg-[#000d1a]/98 backdrop-blur-3xl z-[200] p-4 md:p-10 animate-fade-up flex items-center justify-center overflow-hidden">
-          <div className="glass w-full max-w-7xl rounded-[48px] border border-white/10 p-8 md:p-12 shadow-3xl relative bg-[#001226]/90 flex flex-col overflow-y-auto max-h-[95vh] custom-scrollbar">
-            <button onClick={() => setSelectedStaff(null)} className="absolute top-6 right-6 md:top-10 md:right-10 w-12 h-12 md:w-16 md:h-16 rounded-full bg-white/5 hover:bg-red-500/20 hover:text-red-400 flex items-center justify-center transition-all text-xl font-black border border-white/10 shadow-2xl z-20">✕</button>
-            
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10 border-b border-white/5 pb-8">
-              <div className="flex items-center gap-6">
-                <div className="w-20 h-20 md:w-24 md:h-24 rounded-[32px] overflow-hidden border-2 border-blue-500/20 bg-[#001f3f] flex items-center justify-center shadow-2xl shrink-0">
-                  {selectedStaff.profilePic ? <img src={selectedStaff.profilePic} className="w-full h-full object-cover" /> : <span className="text-3xl font-black text-blue-400">{selectedStaff.name.charAt(0)}</span>}
+                    <button onClick={() => setShowUploadModal(true)} className="absolute -bottom-1 -right-1 bg-purple-600 text-white w-8 h-8 rounded-xl flex items-center justify-center shadow-lg transition-all text-xs border border-[#001f3f]">📷</button>
                 </div>
                 <div className="min-w-0">
-                  <h3 className="text-2xl md:text-5xl font-black text-white uppercase tracking-tighter leading-none mb-1 truncate">{selectedStaff.name}</h3>
-                  <p className="text-blue-400 font-black text-[9px] md:text-xs uppercase tracking-[0.2em] bg-blue-600/5 px-3 py-1 rounded-lg border border-blue-500/10 inline-block">{selectedStaff.username} // Tactical Mastery Insight</p>
+                    <p className="text-purple-400 font-black text-[11px] uppercase tracking-[0.1em] mb-1">Command Node Active</p>
+                    <h2 className="text-2xl font-black text-white uppercase tracking-tighter leading-none mb-2 truncate">{user?.name}</h2>
+                    <div className="flex gap-2">
+                        <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-2 py-1 rounded-lg">{user?.role}</span>
+                        <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-2 py-1 rounded-lg">{user?.branch}</span>
+                        <button onClick={handleExportManagerCSV} className="text-[8px] font-black text-green-400 uppercase tracking-widest bg-green-900/20 border border-green-500/20 px-2 py-1 rounded-lg hover:bg-green-900/40 transition-all flex items-center gap-1">
+                            <span>📊</span> Excel Report
+                        </button>
+                    </div>
                 </div>
-              </div>
-              <button onClick={() => downloadStaffDetailCSV(selectedStaff)} className="bg-emerald-600 hover:bg-emerald-500 px-8 py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all shadow-xl">📊 Download Excel Matrix</button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-              <div className="lg:col-span-8 space-y-8">
-                <div className="bg-indigo-600/10 border border-indigo-500/20 p-8 rounded-[40px] shadow-2xl relative overflow-hidden group">
-                  <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-4 flex items-center gap-3">
-                    <span className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span> Specialized Coaching Directive (Amharic)
-                  </h4>
-                  {loadingStaffAdvice ? (
-                    <div className="flex items-center gap-3 animate-pulse">
-                      <div className="w-3 h-3 bg-indigo-500 rounded-full animate-bounce"></div>
-                      <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Generating Tactical Directive...</p>
-                    </div>
-                  ) : (
-                    <div className="text-gray-100 font-medium text-sm md:text-base leading-relaxed whitespace-pre-line border-l-2 border-indigo-500/30 pl-6 Amharic-text italic">
-                      {staffAdvice || "ምንም አይነት ምክር የለም።"}
-                    </div>
-                  )}
-                </div>
+            <div className="flex-1 flex flex-col gap-4">
+               <div className="flex gap-3 h-full">
+                  <button onClick={() => { setAiStudioTab('advice'); setShowAIStudioModal(true); }} className="flex-1 bg-gradient-to-r from-amber-700 to-amber-600 hover:from-amber-600 hover:to-amber-500 rounded-3xl font-black uppercase text-[10px] text-white shadow-xl flex flex-col items-center justify-center gap-2 transition-all">
+                     <span className="text-2xl">🛡️</span> Service Culture AI
+                  </button>
+                  <button onClick={() => { setAiStudioTab('habit'); setShowAIStudioModal(true); }} className="flex-1 bg-gradient-to-r from-indigo-700 to-blue-700 hover:from-indigo-600 hover:to-blue-600 rounded-3xl font-black uppercase text-[10px] text-white shadow-xl flex flex-col items-center justify-center gap-2 transition-all">
+                     <span className="text-2xl">🧠</span> Team Habit Builder
+                  </button>
+               </div>
+            </div>
+        </section>
 
-                <div className="bg-black/30 p-8 rounded-[40px] border border-white/5 h-[400px] shadow-inner relative">
-                   <h4 className="text-[9px] font-black text-blue-400 uppercase tracking-[0.4em] mb-10 text-center">Protocol Achievement Net Trend (Last 15 Cycles)</h4>
-                   <ResponsiveContainer width="100%" height="80%">
-                      {/* Fix: cast metric value to number to avoid "unknown" operator error */}
-                      <AreaChart data={entries.filter(e => e.staffId === selectedStaff.id && e.status === 'authorized').sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(-15).map(e => ({ date: e.date.split('-').slice(1).join('/'), net: Object.entries(e.metrics).reduce((acc, [k, v]) => acc + (k.includes("Out") ? -(v as number) : (v as number)), 0) }))}>
-                        <defs>
-                          <linearGradient id="colorNet" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4}/>
-                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-                        <XAxis dataKey="date" stroke="#475569" fontSize={8} tickLine={false} axisLine={false} />
-                        <YAxis stroke="#475569" fontSize={8} tickLine={false} axisLine={false} />
-                        <Tooltip contentStyle={{ backgroundColor: '#001f3f', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', fontSize: '10px' }} />
-                        <Area type="monotone" dataKey="net" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorNet)" dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }} />
-                      </AreaChart>
-                   </ResponsiveContainer>
+        {/* AI Strategic Overview */}
+        <section className="glass p-8 rounded-[40px] border border-purple-500/10 bg-purple-600/5 shadow-2xl relative">
+             <div className="flex justify-between items-start mb-6">
+                <div>
+                    <h3 className="text-lg font-black uppercase tracking-tight text-white">Strategic Domain Intelligence</h3>
+                    <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest">AI Performance Synthesis</p>
                 </div>
-              </div>
+                <div className="flex gap-2">
+                     <button onClick={handleGenerateReport} disabled={loadingAI} className="bg-purple-600 hover:bg-purple-500 px-6 py-2 rounded-xl font-black uppercase text-[9px] text-white shadow-lg transition-all disabled:opacity-50">
+                        {loadingAI ? 'Analyzing...' : 'Generate Sync Report'}
+                     </button>
+                     {aiReport && (
+                        <button onClick={playAIReport} className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all ${playingAIReportAudio ? 'bg-red-600 animate-pulse text-white' : 'bg-purple-600/10 text-purple-400 hover:bg-purple-600 hover:text-white'}`}>
+                           {playingAIReportAudio ? '🔇' : '🔊'}
+                        </button>
+                     )}
+                </div>
+             </div>
+             
+             {aiReport ? (
+                 <div className="text-sm text-gray-200 leading-relaxed whitespace-pre-line border-l-2 border-purple-500/30 pl-6 italic font-medium Amharic-text animate-in fade-in">
+                     {renderMarkdownText(aiReport)}
+                 </div>
+             ) : (
+                 <div className="py-12 text-center text-[10px] text-gray-500 font-black uppercase tracking-widest border border-dashed border-white/5 rounded-3xl">
+                     Awaiting Neural Sync...
+                 </div>
+             )}
+        </section>
 
-              <div className="lg:col-span-4 space-y-6">
-                  <h4 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.4em] px-2 flex items-center justify-between">
-                    <span>Protocol Logs</span>
-                  </h4>
-                  <div className="space-y-4 overflow-y-auto max-h-[700px] custom-scrollbar pr-2 pb-10">
-                      {entries.filter(e => e.staffId === selectedStaff.id && e.status === 'authorized').sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => (
-                        <div key={e.id} className="bg-white/5 border border-white/5 p-6 rounded-3xl transition-all hover:bg-white/[0.08] shadow-xl relative overflow-hidden group/item">
-                           <div className="absolute left-0 top-0 w-1 h-full bg-blue-600 group-hover/item:w-2 transition-all"></div>
-                           <div className="flex justify-between items-center mb-6">
-                              <p className="text-[10px] font-black text-white uppercase tracking-widest">{e.date}</p>
-                           </div>
-                           <div className="space-y-3">
-                              {Object.entries(e.metrics).map(([k, v]) => (
-                                 <div key={k} className="flex justify-between items-center text-[9px] font-bold uppercase">
-                                    <span className="text-blue-400">{k}</span>
-                                    <span className="text-white font-mono">{v.toLocaleString()}</span>
-                                 </div>
-                              ))}
-                           </div>
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Staff List & Selection */}
+            <div className="lg:col-span-1 space-y-6">
+                <div className="glass p-6 rounded-[32px] border border-white/5 bg-[#000d1a]/60 flex flex-col h-[500px]">
+                    <div className="mb-4">
+                        <input 
+                          type="text" 
+                          placeholder="Search Nodes..." 
+                          className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:border-purple-500 outline-none"
+                          value={searchTerm}
+                          onChange={e => setSearchTerm(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                        {staff.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase())).map(s => (
+                            <div 
+                                key={s.id} 
+                                onClick={() => handleSelectStaff(s)}
+                                className={`p-3 rounded-xl border flex items-center gap-3 cursor-pointer transition-all group ${selectedStaff?.id === s.id ? 'bg-purple-600/20 border-purple-500/50' : 'bg-white/5 border-white/5 hover:border-white/20'}`}
+                            >
+                                <div className="w-10 h-10 rounded-lg bg-black/40 flex items-center justify-center text-gray-400 font-black overflow-hidden">
+                                    {s.profilePic ? <img src={s.profilePic} className="w-full h-full object-cover" /> : s.name.charAt(0)}
+                                </div>
+                                <div className="min-w-0">
+                                    <p className={`text-[10px] font-black uppercase truncate ${selectedStaff?.id === s.id ? 'text-white' : 'text-gray-300'}`}>{s.name}</p>
+                                    <p className="text-[8px] text-gray-500 uppercase tracking-widest">{s.role}</p>
+                                </div>
+                                <div className="ml-auto text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">➡️</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Staff Analysis / Performance Charts */}
+            <div className="lg:col-span-2 space-y-6">
+                {selectedStaff ? (
+                    <div className="glass p-8 rounded-[40px] border border-white/10 bg-[#000d1a]/40 shadow-2xl animate-in slide-in-from-right-4">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-black uppercase text-white">Node Analysis: <span className="text-blue-400">{selectedStaff.name}</span></h3>
+                            <button onClick={() => setSelectedStaff(null)} className="text-[10px] font-black uppercase text-gray-500 hover:text-white">Close View</button>
                         </div>
-                      ))}
-                  </div>
-              </div>
+                        
+                        <div className="mb-8">
+                            <h4 className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-4">Performance Matrix</h4>
+                            <div className="grid grid-cols-1 gap-4">
+                                {kpis.filter(k => k.assignedToEmail === selectedStaff.email && k.status === 'approved').length > 0 ? (
+                                    kpis.filter(k => k.assignedToEmail === selectedStaff.email && k.status === 'approved').map(k => {
+                                        const staffEntries = entries.filter(e => e.staffId === selectedStaff.id);
+                                        const { yearly, monthly, weekly } = calculateTimeFrameMetrics(k.name, staffEntries);
+                                        
+                                        const yearlyTarget = k.target;
+                                        const monthlyTarget = yearlyTarget / 12;
+                                        const weeklyTarget = yearlyTarget / 52;
+
+                                        const yearlyPerc = yearlyTarget > 0 ? Math.round((yearly / yearlyTarget) * 100) : 0;
+                                        const monthlyPerc = monthlyTarget > 0 ? Math.round((monthly / monthlyTarget) * 100) : 0;
+                                        const weeklyPerc = weeklyTarget > 0 ? Math.round((weekly / weeklyTarget) * 100) : 0;
+
+                                        return (
+                                            <div key={k.id} className="bg-black/30 p-5 rounded-3xl border border-white/5">
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <div>
+                                                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{k.name}</p>
+                                                        <p className="text-sm font-black text-white font-mono">{yearly.toLocaleString()} <span className="text-[10px] text-gray-500">{k.unit}</span> <span className="text-[8px] text-gray-600 uppercase">/ {yearlyTarget.toLocaleString()} Target</span></p>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="grid grid-cols-3 gap-2 mt-2 bg-white/5 p-2 rounded-2xl border border-white/5">
+                                                    <div className="text-center p-1">
+                                                        <p className="text-[8px] text-gray-500 font-bold uppercase mb-1">Weekly</p>
+                                                        <p className={`text-[10px] font-black ${weeklyPerc >= 100 ? 'text-green-400' : weeklyPerc >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{weeklyPerc}%</p>
+                                                        <p className="text-[8px] text-gray-600 font-mono">{weekly.toLocaleString()}</p>
+                                                        {renderProgressBar(weekly, weeklyTarget)}
+                                                    </div>
+                                                    <div className="text-center p-1 border-l border-white/5 border-r">
+                                                        <p className="text-[8px] text-gray-500 font-bold uppercase mb-1">Monthly</p>
+                                                        <p className={`text-[10px] font-black ${monthlyPerc >= 100 ? 'text-green-400' : monthlyPerc >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{monthlyPerc}%</p>
+                                                        <p className="text-[8px] text-gray-600 font-mono">{monthly.toLocaleString()}</p>
+                                                        {renderProgressBar(monthly, monthlyTarget)}
+                                                    </div>
+                                                    <div className="text-center p-1">
+                                                        <p className="text-[8px] text-gray-500 font-bold uppercase mb-1">Yearly</p>
+                                                        <p className={`text-[10px] font-black ${yearlyPerc >= 100 ? 'text-green-400' : yearlyPerc >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{yearlyPerc}%</p>
+                                                        <p className="text-[8px] text-gray-600 font-mono">{yearly.toLocaleString()}</p>
+                                                        {renderProgressBar(yearly, yearlyTarget)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                ) : (
+                                    <div className="col-span-2 text-center py-4 bg-white/5 rounded-2xl border border-dashed border-white/10 text-[10px] font-black uppercase text-gray-600">
+                                        No active strategic targets approved
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="mb-8">
+                            <h4 className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-4">Tactical Advice Generator</h4>
+                            {loadingStaffAdvice ? (
+                                <div className="p-8 text-center text-xs font-black uppercase text-gray-500 animate-pulse">Generating Strategy...</div>
+                            ) : (
+                                <div className="bg-black/30 p-6 rounded-3xl border border-white/5 text-sm text-gray-300 leading-relaxed whitespace-pre-line">
+                                    {staffAdvice ? renderMarkdownText(staffAdvice) : "Select a staff member to generate advice."}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Recent Activity for Staff */}
+                        <div>
+                            <h4 className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-4">Recent Log Entries</h4>
+                            <div className="space-y-2">
+                                {entries.filter(e => e.staffId === selectedStaff.id).slice(-5).map(e => (
+                                    <div key={e.id} className="flex justify-between items-center p-3 bg-white/5 rounded-xl border border-white/5">
+                                        <span className="text-[10px] font-black text-gray-400">{e.date}</span>
+                                        <div className="flex gap-2">
+                                            {Object.entries(e.metrics).slice(0,3).map(([k,v]) => (
+                                                <span key={k} className="text-[9px] bg-black/40 px-2 py-1 rounded text-gray-300">{k}: {v}</span>
+                                            ))}
+                                        </div>
+                                        <span className={`text-[8px] uppercase font-black px-2 py-0.5 rounded ${e.status === 'authorized' ? 'bg-green-600/20 text-green-400' : 'bg-yellow-600/20 text-yellow-400'}`}>{e.status}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="glass p-8 rounded-[40px] border border-white/5 bg-[#000d1a]/20 h-full flex flex-col">
+                        <h3 className="text-lg font-black uppercase text-white mb-6">Domain Performance Overview</h3>
+                        <div className="flex-1 min-h-[300px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={getChartData()}>
+                                    <defs>
+                                        <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#8884d8" stopOpacity={0.3}/>
+                                            <stop offset="95%" stopColor="#8884d8" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                                    <XAxis dataKey="date" stroke="#666" fontSize={10} tickMargin={10} />
+                                    <YAxis stroke="#666" fontSize={10} />
+                                    <Tooltip 
+                                        contentStyle={{backgroundColor: '#000d1a', borderColor: '#ffffff20', borderRadius: '12px'}} 
+                                        itemStyle={{color: '#fff', fontSize: '12px', fontWeight: 'bold'}}
+                                        labelStyle={{color: '#888', fontSize: '10px', marginBottom: '5px'}}
+                                    />
+                                    <Area type="monotone" dataKey="value" stroke="#8884d8" fillOpacity={1} fill="url(#colorVal)" />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <p className="text-center text-[9px] text-gray-600 font-black uppercase tracking-widest mt-4">Authorized Output Volume (Last 14 Days)</p>
+                    </div>
+                )}
             </div>
-          </div>
         </div>
-      )}
+
+        {/* Daily Strategic Pledge Modal */}
+        {showPledgeModal && (
+            <div className="fixed inset-0 z-[250] flex items-center justify-center p-6 bg-black/95 backdrop-blur-md animate-in fade-in">
+            <div className="glass w-full max-w-md p-10 rounded-[48px] border border-indigo-500/30 bg-[#001226] text-center shadow-3xl">
+                <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto mb-6 flex items-center justify-center text-3xl shadow-lg border border-indigo-400/30">📜</div>
+                <h4 className="text-2xl font-black text-white uppercase tracking-tighter mb-4">Daily Strategic Pledge</h4>
+                <p className="text-gray-400 text-xs mb-8 leading-relaxed font-medium">
+                By entering the portal, you commit to the DIZ Core Values: <br/>
+                <span className="text-indigo-400 font-bold">Respectful • Integrity • Collaboration • Agile • Deliver</span>
+                </p>
+                <button onClick={confirmPledge} className="w-full bg-indigo-600 hover:bg-indigo-500 py-5 rounded-3xl font-black uppercase text-xs shadow-xl transition-all active:scale-95">I Commit & Enter</button>
+            </div>
+            </div>
+        )}
+
+        {/* AI Studio Modal */}
+        {showAIStudioModal && (
+            <div className="fixed inset-0 z-[250] flex items-center justify-center p-6 bg-black/95 backdrop-blur-md animate-in fade-in">
+            <div className="glass w-full max-w-2xl p-8 md:p-12 rounded-[48px] border border-blue-500/30 bg-[#001226] shadow-3xl flex flex-col max-h-[90vh]">
+                <div className="flex justify-between items-start mb-4">
+                <h4 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-3">
+                    <span className="text-3xl">🧠</span> AI Service Hub
+                </h4>
+                <button onClick={() => { setShowAIStudioModal(false); setAiStudioResponse(null); }} className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400">✕</button>
+                </div>
+
+                <div className="flex gap-2 mb-6 border-b border-white/5 pb-4">
+                <button onClick={() => { setAiStudioTab('advice'); setAiStudioResponse(null); }} className={`flex-1 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${aiStudioTab === 'advice' ? 'bg-amber-600 text-white shadow-lg' : 'bg-white/5 text-gray-500'}`}>
+                    Pledge Advisor
+                </button>
+                <button onClick={() => { setAiStudioTab('habit'); setAiStudioResponse(null); }} className={`flex-1 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${aiStudioTab === 'habit' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white/5 text-gray-500'}`}>
+                    Habit Architect
+                </button>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto custom-scrollbar mb-6 bg-black/30 rounded-3xl p-6 border border-white/5">
+                {aiStudioResponse ? (
+                    <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-line Amharic-text animate-in fade-in">
+                    {renderMarkdownText(aiStudioResponse)}
+                    </div>
+                ) : (
+                    <div className="text-center py-10 opacity-50 flex flex-col items-center justify-center">
+                    <div className="text-4xl mb-4 grayscale opacity-30">{aiStudioTab === 'habit' ? '🧗' : '💬'}</div>
+                    <p className="text-xs font-black uppercase tracking-widest text-gray-500">
+                        {aiStudioTab === 'habit' ? 'Select a pillar to generate a 5-day plan' : 'Ask for strategic pledge advice'}
+                    </p>
+                    </div>
+                )}
+                </div>
+
+                {aiStudioTab === 'advice' ? (
+                <form onSubmit={handleAIStudioQuery} className="flex gap-3 mb-6">
+                    <input 
+                    type="text" 
+                    className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-6 text-sm text-white focus:border-amber-500 outline-none placeholder:text-gray-600"
+                    placeholder="E.g., How can I be more Agile today?"
+                    value={aiStudioQuery}
+                    onChange={e => setAiStudioQuery(e.target.value)}
+                    />
+                    <button disabled={loadingAiStudio} className="bg-amber-600 hover:bg-amber-500 px-6 rounded-2xl font-black text-xl transition-all shadow-lg disabled:opacity-50">
+                    {loadingAiStudio ? '...' : '➤'}
+                    </button>
+                </form>
+                ) : (
+                <div className="space-y-4 mb-6">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                        {['Respectful', 'Integrity', 'Collaboration', 'Agile', 'Deliver'].map(p => (
+                        <button 
+                            key={p} 
+                            onClick={() => setSelectedHabitPillar(p)}
+                            className={`py-3 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border ${selectedHabitPillar === p ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400' : 'bg-white/5 border-white/5 text-gray-500 hover:text-white'}`}
+                        >
+                            {p}
+                        </button>
+                        ))}
+                    </div>
+                    <button onClick={handleHabitBuild} disabled={loadingAiStudio} className="w-full bg-indigo-600 hover:bg-indigo-500 py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg transition-all disabled:opacity-50">
+                        {loadingAiStudio ? 'Generating Micro-Habits...' : `Create 5-Day ${selectedHabitPillar} Plan`}
+                    </button>
+                </div>
+                )}
+
+                <div className="text-center pt-6 border-t border-white/10">
+                <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest mb-3">Connect External Intelligence</p>
+                <a href="https://chatgpt.com/" target="_blank" rel="noreferrer" className="text-[10px] text-blue-400 font-black uppercase tracking-widest hover:underline hover:text-blue-300">
+                    Open External ChatGPT Coach ↗
+                </a>
+                </div>
+            </div>
+            </div>
+        )}
     </div>
   );
 };

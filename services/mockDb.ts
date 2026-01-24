@@ -180,6 +180,15 @@ class MockDatabase {
     return true;
   }
 
+  async updateEmail(userId: string, newEmail: string): Promise<void> {
+    const user = this.users.find(u => u.id === userId);
+    if (user) {
+      user.recoveryEmail = newEmail;
+      user.emailLinked = true;
+      this.persist();
+    }
+  }
+
   async acceptAgreement(userId: string): Promise<void> {
     const user = this.users.find(u => u.id === userId);
     if (user) { user.agreementAccepted = true; this.persist(); }
@@ -352,8 +361,16 @@ class MockDatabase {
   }
 
   getRepliesForParent(parentId: string, currentUser: UserProfile) {
+    // Check if the parent message was a global broadcast (sent to ALL)
+    const parentMsg = this.messages.find(m => m.id === parentId);
+    const isPublicDirective = parentMsg && parentMsg.toId === 'ALL';
+
     return this.feedback.filter(f => {
       if (f.parentId !== parentId) return false;
+      
+      // If it was a public directive, allow everyone to see the replies (Open Forum)
+      if (isPublicDirective) return true;
+
       const isManager = currentUser.role === UserRole.MANAGER;
       const isCSM = currentUser.role === UserRole.CSM;
       const isReplier = f.staffId === currentUser.id;

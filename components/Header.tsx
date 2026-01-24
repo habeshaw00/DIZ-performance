@@ -4,10 +4,12 @@ import { useAuth } from '../App';
 import { APP_CONFIG } from '../constants';
 import { AppLanguage } from '../types';
 import ChangePasswordModal from './ChangePasswordModal';
+import ChangeEmailModal from './ChangeEmailModal';
 
 const Header: React.FC = () => {
   const { user, toggleDarkMode, darkMode, logout, setMobileMenuOpen, language, setLanguage } = useAuth();
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showEmailModal, setShowEmailModal] = useState(false);
 
   return (
     <header className={`h-16 px-4 md:px-6 flex items-center justify-between border-b ${darkMode ? 'border-white/10 bg-[#001f3f]' : 'border-gray-200 bg-white shadow-sm'}`}>
@@ -43,7 +45,11 @@ const Header: React.FC = () => {
         <div className="flex items-center gap-3 pr-2 md:pr-4 border-r border-white/10">
           <div className="text-right hidden sm:block">
             <p className="text-sm font-black leading-none uppercase truncate max-w-[120px]">{user?.name}</p>
-            <button onClick={() => setShowPasswordModal(true)} className="text-[9px] text-blue-400 font-bold uppercase tracking-widest mt-1.5 hover:underline text-left">Change Passcode</button>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowPasswordModal(true)} className="text-[8px] text-blue-400 font-bold uppercase tracking-widest mt-1 hover:underline">Passcode</button>
+              <span className="text-gray-600 text-[8px] mt-1">•</span>
+              <button onClick={() => setShowEmailModal(true)} className="text-[8px] text-blue-400 font-bold uppercase tracking-widest mt-1 hover:underline">Email</button>
+            </div>
           </div>
           
           <div onClick={() => setShowPasswordModal(true)} className="cursor-pointer w-8 h-8 md:w-9 md:h-9 rounded-xl overflow-hidden border border-blue-500/30 flex items-center justify-center font-bold text-sm bg-blue-600 text-white">
@@ -61,6 +67,7 @@ const Header: React.FC = () => {
         </div>
       </div>
       {showPasswordModal && <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />}
+      {showEmailModal && <ChangeEmailModal onClose={() => setShowEmailModal(false)} />}
     </header>
   );
 };

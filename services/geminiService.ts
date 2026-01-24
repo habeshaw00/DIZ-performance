@@ -2,6 +2,52 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { DailyEntry, KPIConfig, Feedback, AppLanguage } from "../types";
 
+const SERVICE_CULTURE_PLEDGE = `
+OFFICIAL PLEDGE:
+"I am passionately committed to provide the best-in-class banking service to my customers unconditionally!"
+"በምንም ሁኔታ ውስጥ ብሆን በጥልቅ ስሜት በፍቅር እና በቁርጠኝነት በመስራት ለደንበኞቼ የላቀ አገልግሎት ለመስጠት ቃል እገባለሁ!!"
+
+SERVICE CULTURE: 'Stay Relevant'
+
+1. Respectful (ክብር) - The Foundation
+   - Definition: Valuing oneself & others, honoring profession, embracing diversity, being genuine. The glue that holds teams together.
+   - Behaviors:
+     * Empathy: Perspective taking & Emotional Validation.
+     * Professionalism: Professional Ethics, Competence (VUCA mindset), Accountability.
+     * Inclusive: Respect difference, Treat everyone equally & serve differently.
+     * Genuine: Authentic actions, Whole heartedness.
+
+2. Integrity (ታማኝነት)
+   - Definition: Doing the right thing even when no one is watching. Adherence to moral & legal principles.
+   - Behaviors:
+     * Honesty: Trustworthiness, Transparency, Assertiveness.
+     * Discipline: Self control, Adherence to rules.
+     * Responsibility: Ownership mindset, Empowered mindset.
+
+3. Collaboration (ትብብር) - The Multiplication
+   - Definition: Synergy ("Dir Biyabir..."). Foster knowledge sharing. Stronger together.
+   - Behaviors:
+     * Team Work: Foster synergy, Build trust, Be Problem Solver.
+     * Communication: Active listener, Pay attention to non-verbal cues, Follow standards.
+     * Dependability: Reliable actions, Diligence (ትጋት).
+     * Engagement: Purpose alignment, Self motivated.
+
+4. Agile (ቅልጥፍና)
+   - Definition: Mindset to move quickly & easily. Respond swiftly to changing requirements.
+   - Behaviors:
+     * Responsiveness: Respond timely, Creative problem solving.
+     * Flexibility & Adaptability: Observant, Iterative actions (do it, do it better).
+     * Resilience: Embrace change/challenge, Reflective Practice.
+
+5. Deliver (አልቆ መፈፀም)
+   - Definition: Delivering results on time unconditionally. Expectation + 1.
+   - Behaviors:
+     * Efficiency & Effectiveness: Proactive preparation, Maintain Focus (Circle of Control vs Circle of Concern), Value everyone's time.
+     * Convenience: Personalized assistance, Accessible support.
+     * Delight: Choose your attitude (Service is 80% Attitude), Servant hood, Expectation + 1.
+     * Consistency: Unwavering adherence to standards.
+`;
+
 export function decode(base64: string) {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -206,6 +252,54 @@ export const getAIFocusAlertTips = async (staffName: string, stagedMetrics: { [k
     - ${langInstruction}
     - Start with "${titlePrefix}".
     - Exactly 2 high-impact bullet points regarding consistency.`,
+  });
+  return response.text;
+};
+
+export const getServiceCultureAdvice = async (staffName: string, lang: AppLanguage, query: string = "general advice") => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const langInstruction = getLanguageInstruction(lang);
+  
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `You are the Dukem Industry Zone 'Service Culture Guardian'. You must advise the staff member (${staffName}) based strictly on the following CORE PLEDGE and Building Blocks.
+    
+    ${SERVICE_CULTURE_PLEDGE}
+    
+    User Query/Context: "${query}"
+    
+    REQUIREMENTS:
+    - ${langInstruction}
+    - If the user asks for general advice, pick ONE of the 5 pillars (Respectful, Integrity, Collaboration, Agile, Deliver) randomly and explain how they can apply it today.
+    - If the user asks a specific question, answer it using the principles above.
+    - You must reference the OFFICIAL PLEDGE text interchangeably where relevant.
+    - Keep it short, inspiring, and professional. Use emojis.
+    - Start with "Dukem Service Guard:".`,
+  });
+  return response.text;
+};
+
+export const getHabitBuildingPlan = async (staffName: string, pillar: string, lang: AppLanguage) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const langInstruction = getLanguageInstruction(lang);
+  
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-pro-preview',
+    contents: `You are an expert Behavioral Psychologist and Banking Coach. 
+    The staff member (${staffName}) wants to build a new habit based on the Service Culture Pillar: "${pillar}".
+    
+    Reference the official pledge context:
+    ${SERVICE_CULTURE_PLEDGE}
+    
+    Create a 5-DAY HABIT BUILDING PLAN (Micro-Habits) for them.
+    
+    REQUIREMENTS:
+    - ${langInstruction}
+    - Start with an inspiring elaboration on why "${pillar}" matters for their career at Dukem Branch.
+    - Provide a specific, small action for Day 1, Day 2, Day 3, Day 4, and Day 5.
+    - The actions must be "Micro-Habits" (easy to do, take less than 5 minutes, but high impact).
+    - Use formatting (Bold, Bullet points).
+    - Tone: Professional, Encouraging, Structural.`,
   });
   return response.text;
 };
