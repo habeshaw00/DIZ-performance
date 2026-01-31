@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
@@ -114,7 +113,8 @@ const Sidebar: React.FC = () => {
 
             <div className="pt-4 space-y-2">
               <p className="px-5 py-2 text-gray-600 font-black uppercase tracking-widest text-[10px]">Operations Node</p>
-              {hasRight('can_view_vault') && (
+              {/* Innovation Vault - Manager Only */}
+              {isManager && (
                 <Link to="/ideas" className={`flex items-center justify-between gap-3 px-5 py-4 rounded-2xl transition-all ${location.pathname === '/ideas' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
                   <div className="flex items-center gap-3">
                     <span className="text-xl">💡</span><span className="font-bold uppercase tracking-widest text-xs">Innovation Vault</span>

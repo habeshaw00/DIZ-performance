@@ -1,4 +1,3 @@
-
 import { UserRole, UserProfile, KPIConfig, DailyEntry, Feedback, Message, TodoItem } from '../types';
 
 const INITIAL_USERS: UserProfile[] = [
@@ -86,6 +85,15 @@ const INITIAL_USERS: UserProfile[] = [
   },
 ];
 
+interface AuditLog {
+  id: string;
+  actor: string;
+  action: string;
+  targetId?: string;
+  details: string;
+  timestamp: string;
+}
+
 class MockDatabase {
   private users: UserProfile[] = JSON.parse(localStorage.getItem('dukem_users') || JSON.stringify(INITIAL_USERS));
   private kpis: KPIConfig[] = JSON.parse(localStorage.getItem('dukem_kpis') || '[]');
@@ -94,6 +102,7 @@ class MockDatabase {
   private messages: Message[] = JSON.parse(localStorage.getItem('dukem_messages') || '[]');
   private todos: TodoItem[] = JSON.parse(localStorage.getItem('dukem_todos') || '[]');
   private backupLogs: { date: string; status: string }[] = JSON.parse(localStorage.getItem('dukem_backups') || '[]');
+  private auditLogs: AuditLog[] = JSON.parse(localStorage.getItem('dukem_audit_logs') || '[]');
   // Mock password storage - in real app use secure hashing
   private passwords: { [id: string]: string } = JSON.parse(localStorage.getItem('dukem_passwords') || '{}');
 
@@ -106,6 +115,20 @@ class MockDatabase {
     localStorage.setItem('dukem_todos', JSON.stringify(this.todos));
     localStorage.setItem('dukem_backups', JSON.stringify(this.backupLogs));
     localStorage.setItem('dukem_passwords', JSON.stringify(this.passwords));
+    localStorage.setItem('dukem_audit_logs', JSON.stringify(this.auditLogs));
+  }
+
+  private logAudit(actor: string, action: string, details: string, targetId?: string) {
+    const log: AuditLog = {
+      id: Math.random().toString(36).substr(2, 9),
+      actor,
+      action,
+      details,
+      targetId,
+      timestamp: new Date().toISOString()
+    };
+    this.auditLogs.push(log);
+    this.persist();
   }
 
   exportDatabase() {
@@ -137,7 +160,18 @@ class MockDatabase {
   }
 
   getBackupLogs() { return this.backupLogs; }
+  
   logBackup(status: string) {
+    // Simulate cloud backup by creating a snapshot in local storage
+    const snapshot = this.exportDatabase();
+    localStorage.setItem(`dukem_backup_snapshot_${Date.now()}`, snapshot);
+    
+    // Prune old snapshots (keep last 3)
+    const keys = Object.keys(localStorage).filter(k => k.startsWith('dukem_backup_snapshot_')).sort();
+    if (keys.length > 3) {
+      localStorage.removeItem(keys[0]);
+    }
+
     this.backupLogs.push({ date: new Date().toISOString(), status });
     this.persist();
   }
@@ -257,6 +291,7 @@ class MockDatabase {
   addKPI(kpi: Omit<KPIConfig, 'id'>) {
     const newKpi = { ...kpi, id: Math.random().toString(36).substr(2, 9), status: 'pending_signature', signedByStaff: false } as KPIConfig;
     this.kpis.push(newKpi);
+    this.logAudit(kpi.createdBy, 'CREATE_KPI', `Created KPI: ${kpi.name} for ${kpi.assignedToEmail}`);
     this.persist();
     return newKpi;
   }
@@ -273,22 +308,39 @@ class MockDatabase {
 
   approveKPI(id: string) {
     const kpi = this.kpis.find(k => k.id === id);
-    if (kpi) { kpi.status = 'approved'; this.persist(); }
+    if (kpi) { 
+      kpi.status = 'approved'; 
+      this.logAudit('SYSTEM', 'APPROVE_KPI', `Approved KPI: ${kpi.name}`, kpi.id);
+      this.persist(); 
+    }
   }
 
   approveAllKPIs() {
     // Only approve those that have been signed by staff
-    this.kpis = this.kpis.map(k => k.status === 'pending_approval' ? { ...k, status: 'approved' } : k);
+    this.kpis = this.kpis.map(k => {
+      if (k.status === 'pending_approval') {
+        this.logAudit('SYSTEM', 'APPROVE_KPI_BATCH', `Approved KPI: ${k.name}`, k.id);
+        return { ...k, status: 'approved' };
+      }
+      return k;
+    });
     this.persist();
   }
 
   updateKPI(id: string, updates: Partial<KPIConfig>) {
-    this.kpis = this.kpis.map(k => k.id === id ? { ...k, ...updates } as KPIConfig : k);
+    this.kpis = this.kpis.map(k => {
+      if (k.id === id) {
+        this.logAudit('SYSTEM', 'UPDATE_KPI', `Updated KPI ${k.name} target to ${updates.target}`, k.id);
+        return { ...k, ...updates } as KPIConfig;
+      }
+      return k;
+    });
     this.persist();
   }
 
   deleteKPI(id: string) {
     this.kpis = this.kpis.filter(k => k.id !== id);
+    this.logAudit('SYSTEM', 'DELETE_KPI', `Deleted KPI ID: ${id}`);
     this.persist();
   }
 
@@ -304,17 +356,29 @@ class MockDatabase {
 
   authorizeEntry(entryId: string, authorizerId: string) {
     const entry = this.entries.find(e => e.id === entryId);
-    if (entry) { entry.status = 'authorized'; entry.authorizedBy = authorizerId; this.persist(); }
+    if (entry) { 
+      entry.status = 'authorized'; 
+      entry.authorizedBy = authorizerId; 
+      this.logAudit(authorizerId, 'AUTHORIZE_ENTRY', `Authorized entry for ${entry.staffName}`, entry.id);
+      this.persist(); 
+    }
   }
 
   approveAllEntries(authorizerId: string) {
-    this.entries = this.entries.map(e => e.status === 'pending' ? { ...e, status: 'authorized', authorizedBy: authorizerId } : e);
+    this.entries = this.entries.map(e => {
+      if (e.status === 'pending') {
+        this.logAudit(authorizerId, 'AUTHORIZE_ENTRY_BATCH', `Authorized entry for ${e.staffName}`, e.id);
+        return { ...e, status: 'authorized', authorizedBy: authorizerId };
+      }
+      return e;
+    });
     this.persist();
   }
 
   rejectEntry(entryId: string, reason: string, authorizerName: string) {
     const entry = this.entries.find(e => e.id === entryId);
     if (entry) {
+      this.logAudit(authorizerName, 'REJECT_ENTRY', `Rejected entry for ${entry.staffName}. Reason: ${reason}`, entry.id);
       this.addMessage({
         fromId: 'SYSTEM',
         fromName: authorizerName,

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../App';
 import { db } from '../services/mockDb';
@@ -368,19 +367,14 @@ const StaffDashboard: React.FC = () => {
              <p className="text-sm md:text-base font-bold leading-relaxed px-6 Amharic-text text-blue-100 italic">"{perfNote}"</p>
            </div>
            
-           {/* Service Culture & AI Studio Buttons */}
+           {/* Consolidated AI Service & Habit Button */}
            <div className="flex gap-3">
               <button 
                 onClick={() => { setAiStudioQuery("Give me a tip based on the Service Culture Pledge"); setAiStudioTab('advice'); setShowAIStudioModal(true); }}
-                className="flex-1 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 py-3 rounded-2xl font-black uppercase text-[10px] text-white shadow-lg transition-all border border-amber-500/30 flex items-center justify-center gap-2"
+                className="flex-1 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 py-3 rounded-2xl font-black uppercase text-[10px] text-white shadow-lg transition-all border border-blue-500/30 flex items-center justify-center gap-2 group"
               >
-                <span>🛡️</span> Service Pledge AI
-              </button>
-              <button 
-                onClick={() => { setAiStudioTab('habit'); setShowAIStudioModal(true); }}
-                className="flex-1 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 py-3 rounded-2xl font-black uppercase text-[10px] text-white shadow-lg transition-all border border-blue-500/30 flex items-center justify-center gap-2"
-              >
-                <span>🧠</span> Habit Architect
+                <span className="text-2xl group-hover:scale-110 transition-transform">🧠</span> 
+                <span>AI Assistant & Habit Builder</span>
               </button>
            </div>
         </div>
